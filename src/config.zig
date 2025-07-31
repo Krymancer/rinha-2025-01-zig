@@ -11,7 +11,7 @@ pub const Config = struct {
 
     pub fn load() !Config {
         return Config{
-            .port = 9999,
+            .port = 8080,
             .address = "0.0.0.0",
             .payment_processor_default_url = "http://payment-processor-default:8080",
             .payment_processor_fallback_url = "http://payment-processor-fallback:8080",

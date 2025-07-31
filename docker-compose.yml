@@ -1,10 +1,6 @@
 x-service-templates:
   backend: &backend
-    image: krymancer/rinha-2025-01-dotnet
-    environment:
-      - SERVER_PORT=8080
-      - PAYMENT_PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
-      - PAYMENT_PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
+    image: ghcr.io/krymancer/rinha-2025-01-zig:main
     networks:
       - backend
       - payment-processor
@@ -25,12 +21,10 @@ x-service-templates:
 services:
   backend-1:
     <<: *backend
-    image: rinha-backend-zig:latest
     hostname: backend-1
 
   backend-2:
     <<: *backend
-    image: rinha-backend-zig:latest
     hostname: backend-2
 
   nginx:
