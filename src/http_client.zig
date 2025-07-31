@@ -31,13 +31,11 @@ pub const HttpClient = struct {
     }
 
     pub fn postPayment(self: *@This(), url: []const u8, payment: PaymentProcessorRequest) !PaymentProcessorResponse {
-        // Create JSON payload
         var json_buffer = std.ArrayList(u8).init(self.allocator);
         defer json_buffer.deinit();
 
         try std.json.stringify(payment, .{}, json_buffer.writer());
 
-        // Make HTTP request
         var req = try self.client.open(.POST, try std.Uri.parse(url), .{
             .server_header_buffer = try self.allocator.alloc(u8, 4096),
         });
@@ -49,7 +47,6 @@ pub const HttpClient = struct {
         try req.finish();
         try req.wait();
 
-        // Read response
         var response_buffer: [8192]u8 = undefined;
         const bytes_read = try req.readAll(&response_buffer);
         const response_body = try self.allocator.dupe(u8, response_buffer[0..bytes_read]);
@@ -59,7 +56,6 @@ pub const HttpClient = struct {
             return error.PaymentProcessorError;
         }
 
-        // Parse response
         const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response_body, .{});
         defer parsed.deinit();
 
@@ -97,7 +93,6 @@ pub const HttpClient = struct {
             return error.HealthCheckFailed;
         }
 
-        // Parse response
         const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response_body, .{});
         defer parsed.deinit();
 

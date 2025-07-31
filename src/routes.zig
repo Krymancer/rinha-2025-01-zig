@@ -37,7 +37,6 @@ pub fn handlePayment(req: *httpz.Request, res: *httpz.Response) !void {
         return;
     }
 
-    // Process payment
     payment_service.processPayment(payment) catch |err| {
         std.log.err("Failed to process payment: {}", .{err});
         res.status = 500;
@@ -45,7 +44,6 @@ pub fn handlePayment(req: *httpz.Request, res: *httpz.Response) !void {
         return;
     };
 
-    // Return success
     res.status = 200;
     try res.json(.{ .message = "Payment processed successfully" }, .{});
 }

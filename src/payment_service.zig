@@ -58,10 +58,8 @@ pub const PaymentService = struct {
     }
 
     pub fn processPayment(self: *@This(), payment: PaymentRequest) !void {
-        // Choose the best processor based on health and fees
         const processor = try self.chooseProcessor();
 
-        // Attempt to process payment
         const success = try self.sendPaymentToProcessor(processor, payment);
 
         if (success) {
@@ -89,21 +87,16 @@ pub const PaymentService = struct {
     };
 
     fn chooseProcessor(self: *@This()) !ProcessorType {
-        // Check if we need to update health status
         const now = std.time.timestamp();
         if (now - self.last_health_check > self.config.health_check_interval) {
             try self.updateHealthStatus();
             self.last_health_check = now;
         }
-
-        // Choose processor based on health and response time
-        // Default processor has lower fees, so prefer it when both are healthy
         if (!self.default_health.failing) {
             return .default;
         } else if (!self.fallback_health.failing) {
             return .fallback;
         } else {
-            // Both failing, try default first (lower fees)
             return .default;
         }
     }
@@ -114,7 +107,6 @@ pub const PaymentService = struct {
 
         const now = std.time.timestamp();
 
-        // Check default processor health
         if (http_client.getServiceHealth(self.config.payment_processor_default_url)) |health| {
             self.default_health.failing = health.failing;
             self.default_health.minResponseTime = health.minResponseTime;
@@ -125,7 +117,6 @@ pub const PaymentService = struct {
             self.default_health.last_checked = now;
         }
 
-        // Check fallback processor health
         if (http_client.getServiceHealth(self.config.payment_processor_fallback_url)) |health| {
             self.fallback_health.failing = health.failing;
             self.fallback_health.minResponseTime = health.minResponseTime;
@@ -141,13 +132,11 @@ pub const PaymentService = struct {
         var http_client = HttpClient.init(self.allocator);
         defer http_client.deinit();
 
-        // Get the appropriate URL based on processor type
         const url = switch (processor) {
             .default => self.config.payment_processor_default_url,
             .fallback => self.config.payment_processor_fallback_url,
         };
 
-        // Build the payment processor request with current timestamp
         const now = std.time.timestamp();
         var timestamp_buffer: [32]u8 = undefined;
         const timestamp_str = try std.fmt.bufPrint(&timestamp_buffer, "{}", .{now});
@@ -158,24 +147,20 @@ pub const PaymentService = struct {
             .requestedAt = timestamp_str,
         };
 
-        // Try to send payment with retries
         var attempts: u32 = 0;
         while (attempts < self.config.max_retries) {
             attempts += 1;
 
             if (http_client.postPayment(url, processor_request)) |response| {
-                // Success - payment was processed
                 self.allocator.free(response.message);
                 return true;
             } else |err| {
                 std.log.err("Payment attempt {} failed for processor {s}: {}", .{ attempts, @tagName(processor), err });
 
-                // If this was the last attempt, return false
                 if (attempts >= self.config.max_retries) {
                     return false;
                 }
 
-                // Wait a bit before retrying (simple backoff)
                 std.time.sleep(std.time.ns_per_ms * 100 * attempts);
             }
         }
