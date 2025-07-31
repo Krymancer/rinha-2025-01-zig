@@ -1,0 +1,21 @@
+{
+    "name": "Júnior Nascimento",
+    "social": [
+        "https://github.com/krymancer",
+        "https://x.com/joaodocodigo"
+    ],
+    "source-code-repo": "https://github.com/krymancer/rinha-2025-zig",
+    "langs": [
+        "zig"
+    ],
+    "storages": [
+        "redis"
+    ],
+    "messaging": [],
+    "load-balancers": [
+        "nginx"
+    ],
+    "other-technologies": [
+        "docker"
+    ]
+}

@@ -1,0 +1,15 @@
+.{ .name = .backend, .version = "0.1.0", .dependencies = .{
+    .httpz = .{
+        .url = "git+https://github.com/karlseguin/http.zig?ref=master#ef50c6878c3c512786e3311df657eb425b87ba91",
+        .hash = "httpz-0.0.0-PNVzrAvCBgDPm4lE3vCQekPyCKAE2TIsbxly-GeS1_gl",
+    },
+    .datetime = .{
+        .url = "https://github.com/frmdstryr/zig-datetime/archive/refs/heads/master.tar.gz",
+        .hash = "12207143986434d3fa49c9c6e57b2a72226678fe51555e31c0204013d3baabe439b3",
+    },
+}, .paths = .{
+    "build.zig",
+    "build.zig.zon",
+    "src",
+    "README.md",
+}, .fingerprint = 0x8fe5c971c353240f }
