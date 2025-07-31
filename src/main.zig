@@ -2,7 +2,7 @@ const std = @import("std");
 const httpz = @import("httpz");
 const print = std.debug.print;
 
-const PaymentService = @import("payment_service.zig");
+const PaymentService = @import("payment_service.zig").PaymentService;
 const Config = @import("config.zig").Config;
 const RouteHandler = @import("routes.zig");
 

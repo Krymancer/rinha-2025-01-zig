@@ -1,8 +1,5 @@
 const std = @import("std");
 
-allocator: std.mem.Allocator,
-client: std.http.Client,
-
 pub const PaymentProcessorRequest = struct {
     correlationId: []const u8,
     amount: f64,
@@ -18,9 +15,12 @@ pub const HealthCheckResponse = struct {
     minResponseTime: u64,
 };
 
-const HttpClient = struct {
+pub const HttpClient = struct {
+    allocator: std.mem.Allocator,
+    client: std.http.Client,
+
     pub fn init(allocator: std.mem.Allocator) @This() {
-        return @This(){
+        return .{
             .allocator = allocator,
             .client = std.http.Client{ .allocator = allocator },
         };
@@ -50,7 +50,9 @@ const HttpClient = struct {
         try req.wait();
 
         // Read response
-        const response_body = try req.readAll(self.allocator, 8192);
+        var response_buffer: [8192]u8 = undefined;
+        const bytes_read = try req.readAll(&response_buffer);
+        const response_body = try self.allocator.dupe(u8, response_buffer[0..bytes_read]);
         defer self.allocator.free(response_body);
 
         if (req.response.status != .ok) {
@@ -58,17 +60,14 @@ const HttpClient = struct {
         }
 
         // Parse response
-        var parser = std.json.Parser.init(self.allocator, false);
-        defer parser.deinit();
+        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response_body, .{});
+        defer parsed.deinit();
 
-        var tree = try parser.parse(response_body);
-        defer tree.deinit();
-
-        const root = tree.root.Object;
+        const root = parsed.value.object;
         const message = root.get("message") orelse return error.InvalidResponse;
 
         return PaymentProcessorResponse{
-            .message = try self.allocator.dupe(u8, message.String),
+            .message = try self.allocator.dupe(u8, message.string),
         };
     }
 
@@ -85,8 +84,9 @@ const HttpClient = struct {
         try req.finish();
         try req.wait();
 
-        // Read response
-        const response_body = try req.readAll(self.allocator, 8192);
+        var response_buffer: [8192]u8 = undefined;
+        const bytes_read = try req.readAll(&response_buffer);
+        const response_body = try self.allocator.dupe(u8, response_buffer[0..bytes_read]);
         defer self.allocator.free(response_body);
 
         if (req.response.status == .too_many_requests) {
@@ -98,19 +98,16 @@ const HttpClient = struct {
         }
 
         // Parse response
-        var parser = std.json.Parser.init(self.allocator, false);
-        defer parser.deinit();
+        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response_body, .{});
+        defer parsed.deinit();
 
-        var tree = try parser.parse(response_body);
-        defer tree.deinit();
-
-        const root = tree.root.Object;
+        const root = parsed.value.object;
         const failing = root.get("failing") orelse return error.InvalidResponse;
         const min_response_time = root.get("minResponseTime") orelse return error.InvalidResponse;
 
         return HealthCheckResponse{
-            .failing = failing.Bool,
-            .minResponseTime = @intCast(min_response_time.Integer),
+            .failing = failing.bool,
+            .minResponseTime = @intCast(min_response_time.integer),
         };
     }
 };

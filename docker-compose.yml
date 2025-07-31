@@ -12,11 +12,7 @@ x-service-templates:
           cpus: "0.6"
           memory: "120MB"
     healthcheck:
-      test: wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
-      interval: 5m
-      timeout: 3s
-      retries: 3
-      start_period: 2m
+      test:  wget --no-verbose --tries=1 --spider http://0.0.0.0:8080/health || exit 1
 
 services:
   backend-1:
@@ -60,7 +56,7 @@ services:
           cpus: "0.13"
           memory: "70MB"
     networks:
-      - default
+      - backend
 
 networks:
   payment-processor:

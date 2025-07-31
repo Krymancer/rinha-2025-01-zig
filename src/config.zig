@@ -5,12 +5,12 @@ pub const Config = struct {
     address: []const u8,
     payment_processor_default_url: []const u8,
     payment_processor_fallback_url: []const u8,
-    health_check_interval: u64, // seconds
+    health_check_interval: u64,
     max_retries: u32,
     timeout_ms: u64,
 
     pub fn load() !Config {
-        return Config{
+        return .{
             .port = 8080,
             .address = "0.0.0.0",
             .payment_processor_default_url = "http://payment-processor-default:8080",

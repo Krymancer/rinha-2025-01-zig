@@ -1,6 +1,7 @@
 const std = @import("std");
 const httpz = @import("httpz");
-const PaymentService = @import("payment_service.zig");
+const PaymentService = @import("payment_service.zig").PaymentService;
+const PaymentRequest = @import("payment_service.zig").PaymentRequest;
 
 var payment_service: *PaymentService = undefined;
 
@@ -17,7 +18,7 @@ pub fn handlePayment(req: *httpz.Request, res: *httpz.Response) !void {
         return;
     };
 
-    const payment = PaymentService.PaymentRequest.fromJson(allocator, body) catch |err| {
+    const payment = PaymentRequest.fromJson(allocator, body) catch |err| {
         std.log.err("Failed to parse payment request: {}", .{err});
         res.status = 400;
         try res.json(.{ .@"error" = "Invalid request format" }, .{});
