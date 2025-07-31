@@ -13,7 +13,7 @@
     ],
     "messaging": [],
     "load-balancers": [
-        "nginx"
+        "haproxy"
     ],
     "other-technologies": [
         "docker"

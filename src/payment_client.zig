@@ -1,4 +1,5 @@
 const std = @import("std");
+const curl = @import("curl");
 
 pub const PaymentProcessorRequest = struct {
     correlationId: []const u8,
@@ -15,7 +16,7 @@ pub const HealthCheckResponse = struct {
     minResponseTime: u64,
 };
 
-pub const HttpClient = struct {
+pub const PaymentClient = struct {
     allocator: std.mem.Allocator,
     client: std.http.Client,
 
@@ -31,36 +32,40 @@ pub const HttpClient = struct {
     }
 
     pub fn postPayment(self: *@This(), url: []const u8, payment: PaymentProcessorRequest) !PaymentProcessorResponse {
-        var json_buffer = std.ArrayList(u8).init(self.allocator);
-        defer json_buffer.deinit();
+        var client = std.http.Client{ .allocator = self.allocator };
+        defer client.deinit();
 
-        try std.json.stringify(payment, .{}, json_buffer.writer());
+        const uri = try std.Uri.parse(url);
 
-        var req = try self.client.open(.POST, try std.Uri.parse(url), .{
-            .server_header_buffer = try self.allocator.alloc(u8, 4096),
-        });
+        var payload = std.ArrayList(u8).init(self.allocator);
+        defer payload.deinit();
+        try std.json.stringify(payment, .{}, payload.writer());
+        var buf: [1024]u8 = undefined;
+        var req = try client.open(.POST, uri, .{ .server_header_buffer = &buf });
         defer req.deinit();
 
-        req.transfer_encoding = .{ .content_length = json_buffer.items.len };
+        req.transfer_encoding = .{ .content_length = payload.items.len };
         try req.send();
-        try req.writeAll(json_buffer.items);
+        var wtr = req.writer();
+        try wtr.writeAll(payload.items);
         try req.finish();
         try req.wait();
 
-        var response_buffer: [8192]u8 = undefined;
-        const bytes_read = try req.readAll(&response_buffer);
-        const response_body = try self.allocator.dupe(u8, response_buffer[0..bytes_read]);
-        defer self.allocator.free(response_body);
+        var rdr = req.reader();
+        const body = try rdr.readAllAlloc(self.allocator, 1024 * 1024 * 4);
+        defer self.allocator.free(body);
 
-        if (req.response.status != .ok) {
-            return error.PaymentProcessorError;
-        }
+        std.log.err("Response {s}\n", .{body});
 
-        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response_body, .{});
+        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, body, .{});
         defer parsed.deinit();
 
         const root = parsed.value.object;
         const message = root.get("message") orelse return error.InvalidResponse;
+
+        if (req.response.status != .ok) {
+            return error.PaymentProcessorError;
+        }
 
         return PaymentProcessorResponse{
             .message = try self.allocator.dupe(u8, message.string),

@@ -1,7 +1,7 @@
 const std = @import("std");
 const httpz = @import("httpz");
-const HttpClient = @import("http_client.zig").HttpClient;
-const PaymentProcessorRequest = @import("http_client.zig").PaymentProcessorRequest;
+const PaymentClient = @import("payment_client.zig").PaymentClient;
+const PaymentProcessorRequest = @import("payment_client.zig").PaymentProcessorRequest;
 
 pub const PaymentRequest = struct {
     correlationId: []const u8,
@@ -102,7 +102,7 @@ pub const PaymentService = struct {
     }
 
     fn updateHealthStatus(self: *@This()) !void {
-        var http_client = HttpClient.init(self.allocator);
+        var http_client = PaymentClient.init(self.allocator);
         defer http_client.deinit();
 
         const now = std.time.timestamp();
@@ -129,8 +129,8 @@ pub const PaymentService = struct {
     }
 
     fn sendPaymentToProcessor(self: *@This(), processor: ProcessorType, payment: PaymentRequest) !bool {
-        var http_client = HttpClient.init(self.allocator);
-        defer http_client.deinit();
+        var payment_client = PaymentClient.init(self.allocator);
+        defer payment_client.deinit();
 
         const url = switch (processor) {
             .default => self.config.payment_processor_default_url,
@@ -151,7 +151,7 @@ pub const PaymentService = struct {
         while (attempts < self.config.max_retries) {
             attempts += 1;
 
-            if (http_client.postPayment(url, processor_request)) |response| {
+            if (payment_client.postPayment(url, processor_request)) |response| {
                 self.allocator.free(response.message);
                 return true;
             } else |err| {
