@@ -8,14 +8,10 @@
     "langs": [
         "zig"
     ],
-    "storages": [
-        "redis"
-    ],
+    "storages": [],
     "messaging": [],
     "load-balancers": [
         "haproxy"
     ],
-    "other-technologies": [
-        "docker"
-    ]
+    "other-technologies": []
 }

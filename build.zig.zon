@@ -7,6 +7,10 @@
         .url = "https://github.com/frmdstryr/zig-datetime/archive/refs/heads/master.tar.gz",
         .hash = "12207143986434d3fa49c9c6e57b2a72226678fe51555e31c0204013d3baabe439b3",
     },
+    .dotenv = .{
+            .url = "git+https://github.com/dying-will-bullet/dotenv?ref=v0.2.0#ad7e37c4b05d07a3319376eb17afd6ad491ffb6b",
+            .hash = "dotenv-0.2.0-AAAAADB4AAATR8IOjEyxYfFrujDlHaF8Mrie-Ie5uJMt",
+        },
 }, .paths = .{
     "build.zig",
     "build.zig.zon",
