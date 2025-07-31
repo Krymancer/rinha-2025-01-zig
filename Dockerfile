@@ -3,9 +3,7 @@ RUN apk add zig
 WORKDIR /app
 COPY build.zig build.zig.zon ./
 COPY src/ ./src/
-# Use ReleaseFast for maximum performance
-RUN zig build -Doptimize=ReleaseFast --summary all
-
+RUN zig build -Doptimize=ReleaseFast 
 FROM alpine
 RUN apk add --no-cache libc6-compat
 RUN adduser -D -s /bin/sh appuser
