@@ -17,14 +17,20 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("httpz", httpz_dep.module("httpz"));
 
-    const datetime_dep = b.dependency("datetime", .{
+    const dotenv_dep = b.dependency("dotenv", .{ .target = target, .optimize = optimize });
+    exe.root_module.addImport("dotenv", dotenv_dep.module("dotenv"));
+
+    const zul_dep = b.dependency("zul", .{ .target = target, .optimize = optimize });
+    exe.root_module.addImport("zul", zul_dep.module("zul"));
+
+    const zqlite = b.dependency("zqlite", .{
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("datetime", datetime_dep.module("datetime"));
 
-    const dotenv_dep = b.dependency("dotenv", .{ .target = target, .optimize = optimize });
-    exe.root_module.addImport("dotenv", dotenv_dep.module("dotenv"));
+    exe.linkLibC();
+    exe.linkSystemLibrary("sqlite3");
+    exe.root_module.addImport("zqlite", zqlite.module("zqlite"));
 
     b.installArtifact(exe);
 
