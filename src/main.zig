@@ -16,10 +16,20 @@ pub fn main() !void {
         return;
     };
 
-    var payment_service = PaymentService.init(allocator, &config);
-    defer payment_service.deinit();
+    // Create async payment service
+    var async_payment_service = PaymentService.init(allocator, &config) catch |err| {
+        std.log.err("Failed to initialize async payment service: {}", .{err});
+        return;
+    };
+    defer async_payment_service.deinit();
 
-    RouteHandler.setPaymentService(&payment_service);
+    // Start background workers and health monitoring
+    async_payment_service.start() catch |err| {
+        std.log.err("Failed to start async payment service: {}", .{err});
+        return;
+    };
+
+    RouteHandler.setAsyncPaymentService(async_payment_service);
 
     var server = httpz.Server(void).init(allocator, .{
         .port = config.port,
@@ -36,6 +46,11 @@ pub fn main() !void {
     router.get("/payments-summary", RouteHandler.handlePaymentsSummary, .{});
     router.get("/health", RouteHandler.handleHealth, .{});
 
-    std.log.info("Starting server on {s}:{}", .{ config.address, config.port });
+    std.log.info("Starting async server on {s}:{}", .{ config.address, config.port });
+    std.log.info("Features: queue-based processing, background health monitoring, circuit breaker", .{});
+
+    // Note: Signal handling is platform-specific, this is a basic example
+    // In production, you might want to use proper signal handling libraries
+
     try server.listen();
 }

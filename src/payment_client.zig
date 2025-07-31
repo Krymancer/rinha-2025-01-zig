@@ -32,16 +32,13 @@ pub const PaymentClient = struct {
     }
 
     pub fn postPayment(self: *@This(), url: []const u8, payment: PaymentProcessorRequest) !PaymentProcessorResponse {
-        var client = std.http.Client{ .allocator = self.allocator };
-        defer client.deinit();
-
         const uri = try std.Uri.parse(url);
 
         var payload = std.ArrayList(u8).init(self.allocator);
         defer payload.deinit();
         try std.json.stringify(payment, .{}, payload.writer());
         var buf: [1024]u8 = undefined;
-        var req = try client.open(.POST, uri, .{ .server_header_buffer = &buf });
+        var req = try self.client.open(.POST, uri, .{ .server_header_buffer = &buf });
         defer req.deinit();
 
         req.transfer_encoding = .{ .content_length = payload.items.len };
@@ -51,11 +48,13 @@ pub const PaymentClient = struct {
         try req.finish();
         try req.wait();
 
+        if (req.response.status != .ok) {
+            return error.PaymentProcessorError;
+        }
+
         var rdr = req.reader();
         const body = try rdr.readAllAlloc(self.allocator, 1024 * 1024 * 4);
         defer self.allocator.free(body);
-
-        std.log.err("Response {s}\n", .{body});
 
         const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, body, .{});
         defer parsed.deinit();
@@ -63,21 +62,18 @@ pub const PaymentClient = struct {
         const root = parsed.value.object;
         const message = root.get("message") orelse return error.InvalidResponse;
 
-        if (req.response.status != .ok) {
-            return error.PaymentProcessorError;
-        }
-
         return PaymentProcessorResponse{
             .message = try self.allocator.dupe(u8, message.string),
         };
     }
 
     pub fn getServiceHealth(self: *@This(), url: []const u8) !HealthCheckResponse {
-        const health_url = try std.fmt.allocPrint(self.allocator, "{s}/payments/service-health", .{url});
+        const health_url = try std.fmt.allocPrint(self.allocator, "{s}/service-health", .{url});
         defer self.allocator.free(health_url);
 
+        var buf: [4096]u8 = undefined;
         var req = try self.client.open(.GET, try std.Uri.parse(health_url), .{
-            .server_header_buffer = try self.allocator.alloc(u8, 4096),
+            .server_header_buffer = &buf,
         });
         defer req.deinit();
 
@@ -85,11 +81,7 @@ pub const PaymentClient = struct {
         try req.finish();
         try req.wait();
 
-        var response_buffer: [8192]u8 = undefined;
-        const bytes_read = try req.readAll(&response_buffer);
-        const response_body = try self.allocator.dupe(u8, response_buffer[0..bytes_read]);
-        defer self.allocator.free(response_body);
-
+        // Return failure if health check endpoint is not available or returns error
         if (req.response.status == .too_many_requests) {
             return error.TooManyRequests;
         }
@@ -97,6 +89,11 @@ pub const PaymentClient = struct {
         if (req.response.status != .ok) {
             return error.HealthCheckFailed;
         }
+
+        var response_buffer: [8192]u8 = undefined;
+        const bytes_read = try req.readAll(&response_buffer);
+        const response_body = try self.allocator.dupe(u8, response_buffer[0..bytes_read]);
+        defer self.allocator.free(response_body);
 
         const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response_body, .{});
         defer parsed.deinit();

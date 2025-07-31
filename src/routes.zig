@@ -3,10 +3,10 @@ const httpz = @import("httpz");
 const PaymentService = @import("payment_service.zig").PaymentService;
 const PaymentRequest = @import("payment_service.zig").PaymentRequest;
 
-var payment_service: *PaymentService = undefined;
+var async_payment_service: *PaymentService = undefined;
 
-pub fn setPaymentService(service: *PaymentService) void {
-    payment_service = service;
+pub fn setAsyncPaymentService(service: *PaymentService) void {
+    async_payment_service = service;
 }
 
 pub fn handlePayment(req: *httpz.Request, res: *httpz.Response) !void {
@@ -37,25 +37,24 @@ pub fn handlePayment(req: *httpz.Request, res: *httpz.Response) !void {
         return;
     }
 
-    payment_service.processPayment(payment) catch |err| {
-        std.log.err("Failed to process payment: {}", .{err});
+    // Submit to queue for async processing
+    async_payment_service.submitPayment(payment) catch |err| {
+        std.log.err("Failed to queue payment: {}", .{err});
         res.status = 500;
-        try res.json(.{ .@"error" = "Payment processing failed" }, .{});
+        try res.json(.{ .@"error" = "Payment queue is full" }, .{});
         return;
     };
 
-    res.status = 200;
-    try res.json(.{ .message = "Payment processed successfully" }, .{});
+    // Return immediately (async processing)
+    res.status = 202; // Accepted
+    try res.json(.{ .message = "Payment queued for processing" }, .{});
 }
 
 pub fn handlePaymentsSummary(req: *httpz.Request, res: *httpz.Response) !void {
-    const query = try req.query();
-    const from = query.get("from");
-    const to = query.get("to");
+    _ = req;
 
-    const summary = payment_service.getPaymentsSummary(from, to);
+    const summary = async_payment_service.getPaymentsSummary(null, null);
 
-    res.status = 200;
     try res.json(.{
         .default = .{
             .totalRequests = summary.default.totalRequests,
@@ -70,21 +69,32 @@ pub fn handlePaymentsSummary(req: *httpz.Request, res: *httpz.Response) !void {
 
 pub fn handleHealth(req: *httpz.Request, res: *httpz.Response) !void {
     _ = req;
-    res.status = 200;
-    try res.json(.{ .status = "healthy" }, .{});
-}
 
-pub fn handleNotFound(req: *httpz.Request, res: *httpz.Response) void {
-    _ = req;
-    res.status = 404;
-    res.json(.{ .@"error" = "Endpoint not found" }, .{}) catch {};
+    const health = async_payment_service.getHealthStatus();
+
+    try res.json(.{
+        .status = "healthy",
+        .processors = .{
+            .default = .{
+                .failing = health.default_failing,
+            },
+            .fallback = .{
+                .failing = health.fallback_failing,
+            },
+        },
+        .queues = .{
+            .pending = health.queue_size,
+            .failed = health.failed_queue_size,
+        },
+    }, .{});
 }
 
 fn isValidUUID(uuid_str: []const u8) bool {
     if (uuid_str.len != 36) return false;
 
-    if (uuid_str[8] != '-' or uuid_str[13] != '-' or uuid_str[18] != '-' or uuid_str[23] != '-') {
-        return false;
+    const positions = [_]usize{ 8, 13, 18, 23 };
+    for (positions) |pos| {
+        if (uuid_str[pos] != '-') return false;
     }
 
     for (uuid_str, 0..) |char, i| {

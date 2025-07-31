@@ -2,6 +2,7 @@ const std = @import("std");
 const httpz = @import("httpz");
 const PaymentClient = @import("payment_client.zig").PaymentClient;
 const PaymentProcessorRequest = @import("payment_client.zig").PaymentProcessorRequest;
+const PaymentQueue = @import("payment_queue.zig").PaymentQueue;
 
 pub const PaymentRequest = struct {
     correlationId: []const u8,
@@ -10,7 +11,14 @@ pub const PaymentRequest = struct {
     pub fn fromJson(allocator: std.mem.Allocator, json_str: []const u8) !PaymentRequest {
         var parsed = try std.json.parseFromSlice(PaymentRequest, allocator, json_str, .{});
         defer parsed.deinit();
-        return parsed.value;
+        var result = parsed.value;
+        // Duplicate strings to ensure they're owned by this request
+        result.correlationId = try allocator.dupe(u8, result.correlationId);
+        return result;
+    }
+
+    pub fn deinit(self: *PaymentRequest, allocator: std.mem.Allocator) void {
+        allocator.free(self.correlationId);
     }
 };
 
@@ -24,122 +32,294 @@ const ProcessorSummary = struct {
     totalAmount: f64,
 };
 
+const ProcessorType = enum {
+    default,
+    fallback,
+};
+
+const ProcessorHealth = struct {
+    failing: std.atomic.Value(bool),
+    minResponseTime: std.atomic.Value(u64),
+    last_checked: std.atomic.Value(i64),
+
+    pub fn init(failing: bool, min_response_time: u64) ProcessorHealth {
+        return ProcessorHealth{
+            .failing = std.atomic.Value(bool).init(failing),
+            .minResponseTime = std.atomic.Value(u64).init(min_response_time),
+            .last_checked = std.atomic.Value(i64).init(0),
+        };
+    }
+
+    pub fn setFailing(self: *ProcessorHealth, failing: bool) void {
+        self.failing.store(failing, .release);
+    }
+
+    pub fn isFailing(self: *ProcessorHealth) bool {
+        return self.failing.load(.acquire);
+    }
+
+    pub fn setMinResponseTime(self: *ProcessorHealth, time: u64) void {
+        self.minResponseTime.store(time, .release);
+    }
+
+    pub fn getMinResponseTime(self: *ProcessorHealth) u64 {
+        return self.minResponseTime.load(.acquire);
+    }
+
+    pub fn updateLastChecked(self: *ProcessorHealth, timestamp: i64) void {
+        self.last_checked.store(timestamp, .release);
+    }
+
+    pub fn getLastChecked(self: *ProcessorHealth) i64 {
+        return self.last_checked.load(.acquire);
+    }
+};
+
 pub const PaymentService = struct {
     allocator: std.mem.Allocator,
     config: *const @import("config.zig").Config,
+
+    // Statistics
     default_stats: ProcessorSummary,
     fallback_stats: ProcessorSummary,
-    last_health_check: i64,
+    stats_mutex: std.Thread.Mutex,
+
+    // Health monitoring
     default_health: ProcessorHealth,
     fallback_health: ProcessorHealth,
-    mutex: std.Thread.Mutex,
 
-    const ProcessorHealth = struct {
-        failing: bool,
-        minResponseTime: u64,
-        last_checked: i64,
-    };
+    // Queue and workers
+    payment_queue: PaymentQueue(PaymentRequest),
+    failed_queue: PaymentQueue(PaymentRequest),
+    worker_threads: []std.Thread,
+    health_monitor_thread: ?std.Thread,
 
-    pub fn init(allocator: std.mem.Allocator, config: *const @import("config.zig").Config) @This() {
-        return .{
+    // Control
+    is_running: std.atomic.Value(bool),
+
+    const WORKER_COUNT = 2;
+    const HEALTH_CHECK_INTERVAL_MS = 1000; // 1 second
+    const QUEUE_RETRY_INTERVAL_MS = 5000; // 5 seconds
+
+    pub fn init(allocator: std.mem.Allocator, config: *const @import("config.zig").Config) !*PaymentService {
+        const self = try allocator.create(PaymentService);
+
+        self.* = PaymentService{
             .allocator = allocator,
             .config = config,
             .default_stats = ProcessorSummary{ .totalRequests = 0, .totalAmount = 0.0 },
             .fallback_stats = ProcessorSummary{ .totalRequests = 0, .totalAmount = 0.0 },
-            .last_health_check = 0,
-            .default_health = ProcessorHealth{ .failing = false, .minResponseTime = 100, .last_checked = 0 },
-            .fallback_health = ProcessorHealth{ .failing = false, .minResponseTime = 200, .last_checked = 0 },
-            .mutex = std.Thread.Mutex{},
+            .stats_mutex = std.Thread.Mutex{},
+            .default_health = ProcessorHealth.init(true, 100), // Start assuming failing
+            .fallback_health = ProcessorHealth.init(true, 200),
+            .payment_queue = PaymentQueue(PaymentRequest).init(allocator),
+            .failed_queue = PaymentQueue(PaymentRequest).init(allocator),
+            .worker_threads = try allocator.alloc(std.Thread, WORKER_COUNT),
+            .health_monitor_thread = null,
+            .is_running = std.atomic.Value(bool).init(false),
         };
+
+        return self;
     }
 
-    pub fn deinit(self: *@This()) void {
-        _ = self;
+    pub fn start(self: *PaymentService) !void {
+        if (self.is_running.load(.acquire)) {
+            return error.AlreadyRunning;
+        }
+
+        self.is_running.store(true, .release);
+
+        // Start worker threads
+        for (self.worker_threads, 0..) |*thread, i| {
+            thread.* = try std.Thread.spawn(.{}, workerLoop, .{ self, i });
+        }
+
+        // Start health monitor thread
+        self.health_monitor_thread = try std.Thread.spawn(.{}, healthMonitorLoop, .{self});
+
+        // Start failed queue retry thread
+        _ = try std.Thread.spawn(.{}, failedQueueRetryLoop, .{self});
+
+        std.log.info("PaymentService started with {} workers", .{WORKER_COUNT});
     }
 
-    pub fn processPayment(self: *@This(), payment: PaymentRequest) !void {
-        const processor = try self.chooseProcessor();
+    pub fn stop(self: *PaymentService) void {
+        if (!self.is_running.load(.acquire)) {
+            return;
+        }
 
-        const success = try self.sendPaymentToProcessor(processor, payment);
+        std.log.info("Stopping PaymentService...", .{});
+        self.is_running.store(false, .release);
+
+        // Close queues to wake up waiting threads
+        self.payment_queue.close();
+        self.failed_queue.close();
+
+        // Wait for worker threads
+        for (self.worker_threads) |thread| {
+            thread.join();
+        }
+
+        // Wait for health monitor
+        if (self.health_monitor_thread) |thread| {
+            thread.join();
+        }
+
+        std.log.info("PaymentService stopped", .{});
+    }
+
+    pub fn deinit(self: *PaymentService) void {
+        self.stop();
+        self.payment_queue.deinit();
+        self.failed_queue.deinit();
+        self.allocator.free(self.worker_threads);
+        self.allocator.destroy(self);
+    }
+
+    pub fn submitPayment(self: *PaymentService, payment: PaymentRequest) !void {
+        try self.payment_queue.push(payment);
+        std.log.debug("Payment queued: {s} (queue size: {})", .{ payment.correlationId, self.payment_queue.getSize() });
+    }
+
+    fn workerLoop(self: *PaymentService, worker_id: usize) void {
+        std.log.info("Worker {} started", .{worker_id});
+
+        var payment_client = PaymentClient.init(self.allocator);
+        defer payment_client.deinit();
+
+        while (self.is_running.load(.acquire)) {
+            if (self.payment_queue.waitAndPop()) |payment| {
+                self.processPaymentInternal(&payment_client, payment) catch |err| {
+                    std.log.err("Worker {}: Failed to process payment {s}: {}", .{ worker_id, payment.correlationId, err });
+
+                    // Add to failed queue for retry
+                    const failed_payment = PaymentRequest{
+                        .correlationId = self.allocator.dupe(u8, payment.correlationId) catch continue,
+                        .amount = payment.amount,
+                    };
+                    self.failed_queue.push(failed_payment) catch {
+                        std.log.err("Failed to queue payment for retry: {s}", .{payment.correlationId});
+                    };
+                };
+
+                // Clean up the processed payment
+                var mut_payment = payment;
+                mut_payment.deinit(self.allocator);
+            }
+        }
+
+        std.log.info("Worker {} stopped", .{worker_id});
+    }
+
+    fn healthMonitorLoop(self: *PaymentService) void {
+        std.log.info("Health monitor started", .{});
+
+        var payment_client = PaymentClient.init(self.allocator);
+        defer payment_client.deinit();
+
+        while (self.is_running.load(.acquire)) {
+            self.updateHealthStatus(&payment_client);
+            std.time.sleep(HEALTH_CHECK_INTERVAL_MS * std.time.ns_per_ms);
+        }
+
+        std.log.info("Health monitor stopped", .{});
+    }
+
+    fn failedQueueRetryLoop(self: *PaymentService) void {
+        std.log.info("Failed queue retry loop started", .{});
+
+        while (self.is_running.load(.acquire)) {
+            // Try to requeue failed payments when processors are healthy
+            if (!self.default_health.isFailing() or !self.fallback_health.isFailing()) {
+                var retry_count: u32 = 0;
+                const max_retries = 10; // Limit retries per cycle
+
+                while (retry_count < max_retries) {
+                    if (self.failed_queue.pop()) |failed_payment| {
+                        self.payment_queue.push(failed_payment) catch {
+                            // If main queue is full, put it back in failed queue
+                            self.failed_queue.push(failed_payment) catch {};
+                            break;
+                        };
+                        retry_count += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if (retry_count > 0) {
+                    std.log.info("Requeued {} failed payments", .{retry_count});
+                }
+            }
+
+            std.time.sleep(QUEUE_RETRY_INTERVAL_MS * std.time.ns_per_ms);
+        }
+
+        std.log.info("Failed queue retry loop stopped", .{});
+    }
+
+    fn processPaymentInternal(self: *PaymentService, payment_client: *PaymentClient, payment: PaymentRequest) !void {
+        const processor = self.chooseProcessor();
+
+        const start_time = std.time.milliTimestamp();
+        const success = self.sendPaymentToProcessor(payment_client, processor, payment) catch false;
+        const response_time = std.time.milliTimestamp() - start_time;
 
         if (success) {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.updateStats(processor, payment.amount);
 
+            // Update health based on response time (circuit breaker logic)
+            const threshold = 200; // 200ms threshold like in reference
             switch (processor) {
                 .default => {
-                    self.default_stats.totalRequests += 1;
-                    self.default_stats.totalAmount += payment.amount;
+                    if (response_time > threshold) {
+                        self.default_health.setFailing(true);
+                        std.log.warn("Default processor marked as failing due to slow response: {}ms", .{response_time});
+                    } else {
+                        self.default_health.setFailing(false);
+                    }
                 },
                 .fallback => {
-                    self.fallback_stats.totalRequests += 1;
-                    self.fallback_stats.totalAmount += payment.amount;
+                    if (response_time > threshold) {
+                        self.fallback_health.setFailing(true);
+                        std.log.warn("Fallback processor marked as failing due to slow response: {}ms", .{response_time});
+                    } else {
+                        self.fallback_health.setFailing(false);
+                    }
                 },
             }
+
+            std.log.debug("Payment processed successfully: {s} via {s} in {}ms", .{ payment.correlationId, @tagName(processor), response_time });
         } else {
+            // Mark processor as failing on error
+            switch (processor) {
+                .default => self.default_health.setFailing(true),
+                .fallback => self.fallback_health.setFailing(true),
+            }
             return error.PaymentProcessingFailed;
         }
     }
 
-    const ProcessorType = enum {
-        default,
-        fallback,
-    };
-
-    fn chooseProcessor(self: *@This()) !ProcessorType {
-        const now = std.time.timestamp();
-        if (now - self.last_health_check > self.config.health_check_interval) {
-            try self.updateHealthStatus();
-            self.last_health_check = now;
-        }
-        if (!self.default_health.failing) {
+    fn chooseProcessor(self: *PaymentService) ProcessorType {
+        if (!self.default_health.isFailing()) {
             return .default;
-        } else if (!self.fallback_health.failing) {
+        } else if (!self.fallback_health.isFailing()) {
             return .fallback;
         } else {
+            // Both failing, try default anyway
             return .default;
         }
     }
 
-    fn updateHealthStatus(self: *@This()) !void {
-        var http_client = PaymentClient.init(self.allocator);
-        defer http_client.deinit();
-
-        const now = std.time.timestamp();
-
-        if (http_client.getServiceHealth(self.config.payment_processor_default_url)) |health| {
-            self.default_health.failing = health.failing;
-            self.default_health.minResponseTime = health.minResponseTime;
-            self.default_health.last_checked = now;
-        } else |err| {
-            std.log.err("Failed to check default processor health: {}", .{err});
-            self.default_health.failing = true;
-            self.default_health.last_checked = now;
-        }
-
-        if (http_client.getServiceHealth(self.config.payment_processor_fallback_url)) |health| {
-            self.fallback_health.failing = health.failing;
-            self.fallback_health.minResponseTime = health.minResponseTime;
-            self.fallback_health.last_checked = now;
-        } else |err| {
-            std.log.err("Failed to check fallback processor health: {}", .{err});
-            self.fallback_health.failing = true;
-            self.fallback_health.last_checked = now;
-        }
-    }
-
-    fn sendPaymentToProcessor(self: *@This(), processor: ProcessorType, payment: PaymentRequest) !bool {
-        var payment_client = PaymentClient.init(self.allocator);
-        defer payment_client.deinit();
-
+    fn sendPaymentToProcessor(self: *PaymentService, payment_client: *PaymentClient, processor: ProcessorType, payment: PaymentRequest) !bool {
         const url = switch (processor) {
             .default => self.config.payment_processor_default_url,
             .fallback => self.config.payment_processor_fallback_url,
         };
 
-        const now = std.time.timestamp();
+        const now_ms = std.time.milliTimestamp();
         var timestamp_buffer: [32]u8 = undefined;
-        const timestamp_str = try std.fmt.bufPrint(&timestamp_buffer, "{}", .{now});
+        const timestamp_str = try std.fmt.bufPrint(&timestamp_buffer, "{}", .{now_ms});
 
         const processor_request = PaymentProcessorRequest{
             .correlationId = payment.correlationId,
@@ -147,37 +327,76 @@ pub const PaymentService = struct {
             .requestedAt = timestamp_str,
         };
 
-        var attempts: u32 = 0;
-        while (attempts < self.config.max_retries) {
-            attempts += 1;
-
-            if (payment_client.postPayment(url, processor_request)) |response| {
-                self.allocator.free(response.message);
-                return true;
-            } else |err| {
-                std.log.err("Payment attempt {} failed for processor {s}: {}", .{ attempts, @tagName(processor), err });
-
-                if (attempts >= self.config.max_retries) {
-                    return false;
-                }
-
-                std.time.sleep(std.time.ns_per_ms * 100 * attempts);
-            }
+        if (payment_client.postPayment(url, processor_request)) |response| {
+            self.allocator.free(response.message);
+            return true;
+        } else |err| {
+            std.log.err("Payment failed for processor {s}: {}", .{ @tagName(processor), err });
+            return false;
         }
-
-        return false;
     }
 
-    pub fn getPaymentsSummary(self: *@This(), from: ?[]const u8, to: ?[]const u8) PaymentSummary {
+    fn updateHealthStatus(self: *PaymentService, payment_client: *PaymentClient) void {
+        const now = std.time.timestamp();
+
+        // Check default processor
+        if (payment_client.getServiceHealth(self.config.payment_processor_default_url)) |health| {
+            self.default_health.setFailing(health.failing);
+            self.default_health.setMinResponseTime(health.minResponseTime);
+            self.default_health.updateLastChecked(now);
+        } else |err| {
+            std.log.err("Failed to check default processor health: {}", .{err});
+            self.default_health.setFailing(true);
+            self.default_health.updateLastChecked(now);
+        }
+
+        // Check fallback processor
+        if (payment_client.getServiceHealth(self.config.payment_processor_fallback_url)) |health| {
+            self.fallback_health.setFailing(health.failing);
+            self.fallback_health.setMinResponseTime(health.minResponseTime);
+            self.fallback_health.updateLastChecked(now);
+        } else |err| {
+            std.log.err("Failed to check fallback processor health: {}", .{err});
+            self.fallback_health.setFailing(true);
+            self.fallback_health.updateLastChecked(now);
+        }
+    }
+
+    fn updateStats(self: *PaymentService, processor: ProcessorType, amount: f64) void {
+        self.stats_mutex.lock();
+        defer self.stats_mutex.unlock();
+
+        switch (processor) {
+            .default => {
+                self.default_stats.totalRequests += 1;
+                self.default_stats.totalAmount += amount;
+            },
+            .fallback => {
+                self.fallback_stats.totalRequests += 1;
+                self.fallback_stats.totalAmount += amount;
+            },
+        }
+    }
+
+    pub fn getPaymentsSummary(self: *PaymentService, from: ?[]const u8, to: ?[]const u8) PaymentSummary {
         _ = from;
         _ = to;
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.stats_mutex.lock();
+        defer self.stats_mutex.unlock();
 
         return PaymentSummary{
             .default = self.default_stats,
             .fallback = self.fallback_stats,
+        };
+    }
+
+    pub fn getHealthStatus(self: *PaymentService) struct { default_failing: bool, fallback_failing: bool, queue_size: u32, failed_queue_size: u32 } {
+        return .{
+            .default_failing = self.default_health.isFailing(),
+            .fallback_failing = self.fallback_health.isFailing(),
+            .queue_size = self.payment_queue.getSize(),
+            .failed_queue_size = self.failed_queue.getSize(),
         };
     }
 };

@@ -13,11 +13,11 @@ pub const Config = struct {
         return .{
             .port = 8080,
             .address = "0.0.0.0",
-            .payment_processor_default_url = "http://payment-processor-default:8080",
-            .payment_processor_fallback_url = "http://payment-processor-fallback:8080",
-            .health_check_interval = 5,
-            .max_retries = 3,
-            .timeout_ms = 5000,
+            .payment_processor_default_url = "http://payment-processor-default:8080/payments",
+            .payment_processor_fallback_url = "http://payment-processor-fallback:8080/payments",
+            .health_check_interval = 1, // More frequent health checks
+            .max_retries = 1, // Simplified retry logic
+            .timeout_ms = 2000, // Shorter timeout
         };
     }
 };
