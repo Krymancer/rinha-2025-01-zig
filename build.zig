@@ -23,15 +23,6 @@ pub fn build(b: *std.Build) void {
     const zul_dep = b.dependency("zul", .{ .target = target, .optimize = optimize });
     exe.root_module.addImport("zul", zul_dep.module("zul"));
 
-    const zqlite = b.dependency("zqlite", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
-    exe.linkLibC();
-    exe.linkSystemLibrary("sqlite3");
-    exe.root_module.addImport("zqlite", zqlite.module("zqlite"));
-
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
