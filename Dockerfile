@@ -7,16 +7,13 @@ RUN apk add --no-cache \
   linux-headers \
   zig
 WORKDIR /app
-COPY build.zig .
-COPY build.zig.zon .
-COPY src/ src/
-RUN zig build -Doptimize=ReleaseFast
-FROM alpine:latest
-RUN apk add --no-cache libc6-compat
-RUN addgroup -g 1001 -S ziguser && \
-  adduser -S ziguser -u 1001
-COPY --from=builder /app/zig-out/bin/rinha-backend /usr/local/bin/rinha-backend
-RUN chown ziguser:ziguser /usr/local/bin/rinha-backend
-USER ziguser
-EXPOSE 9999
-ENTRYPOINT ["/usr/local/bin/rinha-backend"]
+COPY build.zig build.zig.zon ./
+COPY src/ ./src/
+RUN zig build -Doptimize=ReleaseFast 
+FROM alpine
+RUN apk add --no-cache libc6-compat sqlite
+RUN adduser -D -s /bin/sh appuser
+COPY --from=builder /app/zig-out/bin/backend /usr/local/bin/backend
+USER appuser
+EXPOSE 8080
+CMD ["backend"]

@@ -11,23 +11,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Install the binary
     b.installArtifact(exe);
 
-    // Create run command
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
 
-    // Add CLI args if provided
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
 
-    // Create run step
     const run_step = b.step("run", "Run the application");
     run_step.dependOn(&run_cmd.step);
 
-    // Create test step
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
