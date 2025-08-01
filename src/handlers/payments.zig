@@ -8,15 +8,26 @@ pub fn handle(
     db_pool: *database.Pool,
     request: *std.http.Server.Request,
 ) !void {
-    _ = db_pool; // Will be used when database is implemented
+    // Read and parse request body
+    var body_buffer: [4096]u8 = undefined;
+    const reader = try request.reader();
+    const bytes_read = try reader.read(&body_buffer);
+    const body = body_buffer[0..bytes_read];
 
-    // For now, we'll create a mock payment to demonstrate the flow
-    // In a real implementation, we would parse the request body
-    const mock_correlation_id = "550e8400-e29b-41d4-a716-446655440000";
-    const mock_amount: f64 = 100.0;
+    // Parse JSON
+    const parsed = std.json.parseFromSlice(models.PaymentRequest, allocator, body, .{}) catch |err| {
+        std.log.err("Failed to parse JSON: {any}", .{err});
+        return request.respond("{\"error\":\"Invalid JSON format\"}", .{
+            .status = .bad_request,
+            .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+        });
+    };
+    defer parsed.deinit();
 
-    // Validate UUID format (using mock data for now)
-    if (!isValidUUID(mock_correlation_id)) {
+    const payment_request = parsed.value;
+
+    // Validate UUID format
+    if (!isValidUUID(payment_request.correlationId)) {
         return request.respond("{\"error\":\"Invalid correlation ID format\"}", .{
             .status = .bad_request,
             .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
@@ -24,19 +35,46 @@ pub fn handle(
     }
 
     // Validate amount
-    if (mock_amount <= 0) {
+    if (payment_request.amount <= 0) {
         return request.respond("{\"error\":\"Amount must be positive\"}", .{
             .status = .bad_request,
             .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
         });
     }
 
-    // Store payment in database with pending status (simplified)
-    // In a real implementation, you'd use a proper database connection
-    std.log.info("Payment received: {s} for amount {d}", .{ mock_correlation_id, mock_amount });
+    // Check if payment already exists
+    if (db_pool.paymentExists(payment_request.correlationId) catch false) {
+        return request.respond("{\"error\":\"Payment with this correlation ID already exists\"}", .{
+            .status = .conflict,
+            .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+        });
+    }
+
+    // Create payment record
+    const payment = models.Payment{
+        .id = 0, // Will be set by database
+        .correlation_id = payment_request.correlationId,
+        .amount = payment_request.amount,
+        .status = .pending,
+        .processor = null,
+        .created_at = "", // Will be set by database
+        .processed_at = null,
+        .requested_at = null,
+    };
+
+    // Insert payment into database
+    const payment_id = db_pool.insertPayment(payment) catch |err| {
+        std.log.err("Failed to insert payment: {any}", .{err});
+        return request.respond("{\"error\":\"Failed to store payment\"}", .{
+            .status = .internal_server_error,
+            .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+        });
+    };
+
+    std.log.info("Payment stored with ID {}: {s} for amount {d}", .{ payment_id, payment_request.correlationId, payment_request.amount });
 
     // Enqueue for processing
-    queue_service.enqueuePayment(allocator, mock_correlation_id) catch |err| {
+    queue_service.enqueuePayment(allocator, payment_request.correlationId) catch |err| {
         std.log.err("Failed to enqueue payment: {any}", .{err});
         return request.respond("{\"error\":\"Failed to enqueue payment\"}", .{
             .status = .internal_server_error,

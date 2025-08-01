@@ -30,6 +30,7 @@ pub const PaymentStatus = enum {
     processing,
     completed,
     failed,
+    fallback_completed,
 
     pub fn toString(self: PaymentStatus) []const u8 {
         return switch (self) {
@@ -37,6 +38,7 @@ pub const PaymentStatus = enum {
             .processing => "processing",
             .completed => "completed",
             .failed => "failed",
+            .fallback_completed => "fallback_completed",
         };
     }
 };

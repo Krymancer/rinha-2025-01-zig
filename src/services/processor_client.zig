@@ -44,16 +44,18 @@ pub const ProcessorClient = struct {
         const payload = try std.json.stringifyAlloc(self.allocator, payment, .{});
         defer self.allocator.free(payload);
 
-        var headers = std.http.Headers{ .allocator = self.allocator };
-        defer headers.deinit();
-        try headers.append("content-type", "application/json");
-
         const uri = try std.Uri.parse(full_url);
-        var request = try self.http_client.open(.POST, uri, headers, .{});
+        var server_header_buffer: [8192]u8 = undefined;
+        var request = try self.http_client.open(.POST, uri, .{
+            .server_header_buffer = &server_header_buffer,
+            .extra_headers = &.{
+                .{ .name = "content-type", .value = "application/json" },
+            },
+        });
         defer request.deinit();
 
         request.transfer_encoding = .{ .content_length = payload.len };
-        try request.send(.{});
+        try request.send();
         try request.writeAll(payload);
         try request.finish();
         try request.wait();
@@ -86,10 +88,13 @@ pub const ProcessorClient = struct {
         defer self.allocator.free(full_url);
 
         const uri = try std.Uri.parse(full_url);
-        var request = try self.http_client.open(.GET, uri, .{}, .{});
+        var server_header_buffer: [8192]u8 = undefined;
+        var request = try self.http_client.open(.GET, uri, .{
+            .server_header_buffer = &server_header_buffer,
+        });
         defer request.deinit();
 
-        try request.send(.{});
+        try request.send();
         try request.finish();
         try request.wait();
 
