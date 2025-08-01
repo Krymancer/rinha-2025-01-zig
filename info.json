@@ -4,14 +4,23 @@
         "https://github.com/krymancer",
         "https://x.com/joaodocodigo"
     ],
-    "source-code-repo": "https://github.com/krymancer/rinha-2025-zig",
+    "source-code-repo": "https://github.com/krymancer/rinha-2025-01-zig",
     "langs": [
         "zig"
     ],
-    "storages": [],
-    "messaging": [],
+    "storages": [
+        "postgresql",
+        "redis"
+    ],
+    "messaging": [
+        "in-memory-queue"
+    ],
     "load-balancers": [
         "haproxy"
     ],
-    "other-technologies": []
+    "other-technologies": [
+        "httpz",
+        "pgzig",
+        "alpine-linux"
+    ]
 }

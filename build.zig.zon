@@ -1,23 +1,10 @@
-.{ .name = .backend, .version = "0.1.0", .dependencies = .{
-    .httpz = .{
-        .url = "git+https://github.com/karlseguin/http.zig?ref=master#ef50c6878c3c512786e3311df657eb425b87ba91",
-        .hash = "httpz-0.0.0-PNVzrAvCBgDPm4lE3vCQekPyCKAE2TIsbxly-GeS1_gl",
+.{
+    .name = .backend,
+    .version = "0.1.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
     },
-    .dotenv = .{
-        .url = "git+https://github.com/dying-will-bullet/dotenv?ref=v0.2.0#ad7e37c4b05d07a3319376eb17afd6ad491ffb6b",
-        .hash = "dotenv-0.2.0-AAAAADB4AAATR8IOjEyxYfFrujDlHaF8Mrie-Ie5uJMt",
-    },
-    .zul = .{
-        .url = "https://github.com/karlseguin/zul/archive/master.tar.gz",
-        .hash = "zul-0.0.0-1oDot1WrBwAulSuKZZ5Z8EWFq_FKKpZBQb7rfZCWsbs6",
-    },
-    .zqlite = .{
-            .url = "git+https://github.com/karlseguin/zqlite.zig?ref=master#fdb6ca1e379b002dd6effe22b96dc8ee93befe5e",
-            .hash = "zqlite-0.0.0-RWLaY5eAlQCBMG2E0Y8JjWkT-SZlZp39cu75CUVb2QoP",
-        },
-}, .paths = .{
-    "build.zig",
-    "build.zig.zon",
-    "src",
-    "README.md",
-}, .fingerprint = 0x8fe5c971c353240f }
+    .fingerprint = 0x8fe5c9718fd661d2,
+}
