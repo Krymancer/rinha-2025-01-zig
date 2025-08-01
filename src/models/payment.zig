@@ -25,6 +25,13 @@ pub const ProcessorSummary = struct {
     totalAmount: f64,
 };
 
+pub const PaymentSummaryAll = struct {
+    default_total_requests: u32,
+    default_total_amount: f64,
+    fallback_total_requests: u32,
+    fallback_total_amount: f64,
+};
+
 pub const PaymentStatus = enum {
     pending,
     processing,

@@ -27,16 +27,8 @@ pub fn handle(
     }
 
     // Get summaries from database
-    const default_summary = db_pool.getPaymentSummary(.default, from_date, to_date) catch |err| {
-        std.log.err("Failed to get default processor summary: {any}", .{err});
-        return request.respond("{\"error\":\"Failed to retrieve payment summary\"}", .{
-            .status = .internal_server_error,
-            .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-        });
-    };
-
-    const fallback_summary = db_pool.getPaymentSummary(.fallback, from_date, to_date) catch |err| {
-        std.log.err("Failed to get fallback processor summary: {any}", .{err});
+    const summary = db_pool.getPaymentSummary(from_date, to_date) catch |err| {
+        std.log.err("Failed to get payment summary: {any}", .{err});
         return request.respond("{\"error\":\"Failed to retrieve payment summary\"}", .{
             .status = .internal_server_error,
             .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
@@ -55,7 +47,7 @@ pub fn handle(
         \\    "totalAmount": {d}
         \\  }}
         \\}}
-    , .{ default_summary.totalRequests, default_summary.totalAmount, fallback_summary.totalRequests, fallback_summary.totalAmount });
+    , .{ summary.default_total_requests, summary.default_total_amount, summary.fallback_total_requests, summary.fallback_total_amount });
     defer allocator.free(response);
 
     return request.respond(response, .{

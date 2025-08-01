@@ -22,7 +22,8 @@ const PostgresConnection = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16) !PostgresConnection {
-        const stream = try std.net.tcpConnectToHost(allocator, host, port);
+        const address = try std.net.Address.parseIp(host, port);
+        const stream = try std.net.tcpConnectToAddress(address);
 
         return PostgresConnection{
             .stream = stream,
@@ -101,7 +102,7 @@ pub const Pool = struct {
         defer self.connections_mutex.unlock();
 
         if (self.available_connections.items.len > 0) {
-            const index = self.available_connections.swapRemove(0);
+            const index = self.available_connections.pop();
             return &self.connections.items[index];
         }
 
@@ -134,8 +135,7 @@ pub const Pool = struct {
         defer self.releaseConnection(conn) catch {};
 
         // Create SQL query
-        const processor_str = if (payment.processor) |p| @tagName(p) else "default";
-        const query = try std.fmt.allocPrint(self.allocator, "INSERT INTO payments (correlation_id, amount, status, processor, created_at) VALUES ('{s}', {d}, '{s}', '{s}', NOW()) RETURNING id", .{ payment.correlation_id, payment.amount, @tagName(payment.status), processor_str });
+        const query = try std.fmt.allocPrint(self.allocator, "INSERT INTO payments (correlation_id, amount, status, processor, created_at) VALUES ('{s}', {d}, '{s}', '{s}', NOW()) RETURNING id", .{ payment.correlation_id, payment.amount, @tagName(payment.status), @tagName(payment.processor) });
         defer self.allocator.free(query);
 
         try conn.execute(query);
@@ -155,7 +155,8 @@ pub const Pool = struct {
 
         // In a real implementation, this would parse PostgreSQL result
         // For now, we'll simulate finding a payment
-        try conn.execute(query);
+        _ = conn;
+        _ = query;
 
         print("Found payment {s} with status processing\n", .{correlation_id});
 
@@ -166,8 +167,6 @@ pub const Pool = struct {
             .status = PaymentStatus.processing,
             .processor = PaymentProcessor.default,
             .created_at = "2025-08-01T12:00:00Z",
-            .processed_at = null,
-            .requested_at = null,
         };
     }
 
@@ -191,7 +190,8 @@ pub const Pool = struct {
         defer self.allocator.free(query);
 
         // In a real implementation, this would check if result has rows
-        try conn.execute(query);
+        _ = conn;
+        _ = query;
 
         // For now, assume payment doesn't exist (to avoid duplicates in testing)
         return false;
@@ -215,7 +215,8 @@ pub const Pool = struct {
         ;
 
         // In a real implementation, this would parse PostgreSQL result
-        try conn.execute(query);
+        _ = conn;
+        _ = query;
 
         // For now, return simulated summary
         return models.PaymentSummaryAll{

@@ -16,8 +16,7 @@ pub const Pool = struct {
     allocator: std.mem.Allocator,
     config: Config,
     pg_pool: repository.Pool,
-    // In a real implementation, this would contain actual connection pool
-    // For now, we'll simulate database operations with proper structure
+    // PostgreSQL connection pool wrapper
 
     pub fn init(allocator: std.mem.Allocator, config: Config) !Pool {
         std.log.info("Initializing database pool for {s}:{}", .{ config.host, config.port });
@@ -49,68 +48,43 @@ pub const Pool = struct {
 
     // Insert a new payment record
     pub fn insertPayment(self: *Pool, payment: models.Payment) !i32 {
-        _ = self;
-        std.log.info("DB: Inserting payment {s} with amount {d}", .{ payment.correlation_id, payment.amount });
+        const result = try self.pg_pool.insertPayment(payment);
+        defer self.allocator.free(result);
 
-        // In a real implementation, this would execute:
-        // INSERT INTO payments (correlation_id, amount, status, processor)
-        // VALUES ($1, $2, $3, $4) RETURNING id
+        std.log.info("DB: Inserted payment {s} with amount {d}", .{ payment.correlation_id, payment.amount });
 
-        // For now, return a mock ID
-        return 1;
+        // Parse the returned ID string to integer
+        const id = std.fmt.parseInt(i32, result, 10) catch 1;
+        return id;
     }
 
-    // Update payment status and processor
+    // Update payment status
     pub fn updatePaymentStatus(self: *Pool, correlation_id: []const u8, status: models.PaymentStatus, processor: ?models.PaymentProcessor) !void {
-        _ = self;
+        try self.pg_pool.updatePaymentStatus(correlation_id, status);
+
         const proc_str = if (processor) |p| p.toString() else "null";
-        std.log.info("DB: Updating payment {s} to status {} with processor {s}", .{ correlation_id, status, proc_str });
-
-        // In a real implementation, this would execute:
-        // UPDATE payments SET status = $1, processor = $2, updated_at = NOW()
-        // WHERE correlation_id = $3
-    }
-
-    // Get payment summary for a processor
-    pub fn getPaymentSummary(self: *Pool, processor: models.PaymentProcessor, from_date: ?[]const u8, to_date: ?[]const u8) !models.ProcessorSummary {
-        _ = self;
-        _ = from_date;
-        _ = to_date;
-
-        std.log.info("DB: Getting payment summary for processor {s}", .{processor.toString()});
-
-        // In a real implementation, this would execute:
-        // SELECT COUNT(*) as total_requests, COALESCE(SUM(amount), 0) as total_amount
-        // FROM payments WHERE processor = $1 AND status IN ('completed', 'fallback_completed')
-        // AND ($2 IS NULL OR created_at >= $2) AND ($3 IS NULL OR created_at <= $3)
-
-        // For now, return mock data
-        return models.ProcessorSummary{
-            .totalRequests = 0,
-            .totalAmount = 0.0,
-        };
+        std.log.info("DB: Updated payment {s} to status {} with processor {s}", .{ correlation_id, status, proc_str });
     }
 
     // Check if payment exists
     pub fn paymentExists(self: *Pool, correlation_id: []const u8) !bool {
-        _ = self;
-        std.log.info("DB: Checking if payment {s} exists", .{correlation_id});
-
-        // In a real implementation, this would execute:
-        // SELECT EXISTS(SELECT 1 FROM payments WHERE correlation_id = $1)
-
-        return false;
+        const exists = try self.pg_pool.paymentExists(correlation_id);
+        std.log.info("DB: Payment {s} exists: {}", .{ correlation_id, exists });
+        return exists;
     }
 
     // Get payment by correlation ID
     pub fn getPayment(self: *Pool, correlation_id: []const u8) !?models.Payment {
-        _ = self;
-        std.log.info("DB: Getting payment {s}", .{correlation_id});
+        const payment = try self.pg_pool.getPayment(correlation_id);
+        std.log.info("DB: Retrieved payment {s}", .{correlation_id});
+        return payment;
+    }
 
-        // In a real implementation, this would execute:
-        // SELECT * FROM payments WHERE correlation_id = $1
-
-        return null;
+    // Get payment summary for all processors
+    pub fn getPaymentSummary(self: *Pool, from_date: ?[]const u8, to_date: ?[]const u8) !models.PaymentSummaryAll {
+        const summary = try self.pg_pool.getPaymentSummary(from_date, to_date);
+        std.log.info("DB: Retrieved payment summary", .{});
+        return summary;
     }
 };
 
