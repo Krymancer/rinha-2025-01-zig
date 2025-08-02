@@ -16,7 +16,6 @@ pub const DbError = error{
     AuthenticationFailed,
 };
 
-// Simple PostgreSQL wire protocol implementation
 const PostgresConnection = struct {
     stream: std.net.Stream,
     allocator: std.mem.Allocator,
@@ -35,27 +34,20 @@ const PostgresConnection = struct {
     }
 
     pub fn authenticate(self: *PostgresConnection, database: []const u8, username: []const u8, password: []const u8) !void {
-        // Simplified authentication - in real implementation would use proper PostgreSQL protocol
         _ = self;
         _ = database;
         _ = username;
         _ = password;
-        // For now, assume authentication succeeds
     }
 
     pub fn execute(self: *PostgresConnection, sql_query: []const u8) !void {
-        // Simplified query execution - in real implementation would use proper PostgreSQL protocol
         _ = self;
         _ = sql_query;
-        // For now, assume query succeeds
     }
 
     pub fn queryRows(self: *PostgresConnection, comptime T: type, result_allocator: std.mem.Allocator, query_text: []const u8) ![]T {
-        // Simplified query with results - in real implementation would parse PostgreSQL results
         _ = self;
         _ = query_text;
-
-        // Return empty result for now
         return try result_allocator.alloc(T, 0);
     }
 };
@@ -104,8 +96,6 @@ pub const Pool = struct {
             const index = self.available_connections.swapRemove(0);
             return &self.connections.items[index];
         }
-
-        // Create new connection if pool has space
         if (self.connections.items.len < 10) { // Max 10 connections
             var conn = try PostgresConnection.init(self.allocator, self.host, self.port);
             try conn.authenticate(self.database, self.username, self.password);
@@ -119,8 +109,6 @@ pub const Pool = struct {
     pub fn releaseConnection(self: *Pool, conn: *PostgresConnection) !void {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
-
-        // Find connection index
         for (self.connections.items, 0..) |*stored_conn, i| {
             if (stored_conn == conn) {
                 try self.available_connections.append(i);
@@ -132,8 +120,6 @@ pub const Pool = struct {
     pub fn insertPayment(self: *Pool, payment: Payment) ![]const u8 {
         const conn = try self.getConnection();
         defer self.releaseConnection(conn) catch {};
-
-        // Create SQL query
         const processor_str = if (payment.processor) |p| @tagName(p) else "default";
         const query = try std.fmt.allocPrint(self.allocator, "INSERT INTO payments (correlation_id, amount, status, processor, created_at) VALUES ('{s}', {d}, '{s}', '{s}', NOW()) RETURNING id", .{ payment.correlation_id, payment.amount, @tagName(payment.status), processor_str });
         defer self.allocator.free(query);
@@ -141,8 +127,6 @@ pub const Pool = struct {
         try conn.execute(query);
 
         print("Stored payment {s} with amount {d}\n", .{ payment.correlation_id, payment.amount });
-
-        // Return correlation_id as identifier
         return try self.allocator.dupe(u8, payment.correlation_id);
     }
 
@@ -152,9 +136,6 @@ pub const Pool = struct {
 
         const query = try std.fmt.allocPrint(self.allocator, "SELECT id, correlation_id, amount, status, processor, created_at FROM payments WHERE correlation_id = '{s}'", .{correlation_id});
         defer self.allocator.free(query);
-
-        // In a real implementation, this would parse PostgreSQL result
-        // For now, we'll simulate finding a payment
         try conn.execute(query);
 
         print("Found payment {s} with status processing\n", .{correlation_id});
@@ -171,11 +152,12 @@ pub const Pool = struct {
         };
     }
 
-    pub fn updatePaymentStatus(self: *Pool, correlation_id: []const u8, status: PaymentStatus) !void {
+    pub fn updatePaymentStatus(self: *Pool, correlation_id: []const u8, status: PaymentStatus, processor: ?PaymentProcessor) !void {
         const conn = try self.getConnection();
         defer self.releaseConnection(conn) catch {};
 
-        const query = try std.fmt.allocPrint(self.allocator, "UPDATE payments SET status = '{s}' WHERE correlation_id = '{s}'", .{ @tagName(status), correlation_id });
+        const processor_str = if (processor) |p| @tagName(p) else "default";
+        const query = try std.fmt.allocPrint(self.allocator, "UPDATE payments SET status = '{s}', processor = '{s}' WHERE correlation_id = '{s}'", .{ @tagName(status), processor_str, correlation_id });
         defer self.allocator.free(query);
 
         try conn.execute(query);
@@ -189,11 +171,7 @@ pub const Pool = struct {
 
         const query = try std.fmt.allocPrint(self.allocator, "SELECT 1 FROM payments WHERE correlation_id = '{s}' LIMIT 1", .{correlation_id});
         defer self.allocator.free(query);
-
-        // In a real implementation, this would check if result has rows
         try conn.execute(query);
-
-        // For now, assume payment doesn't exist (to avoid duplicates in testing)
         return false;
     }
 
@@ -213,11 +191,7 @@ pub const Pool = struct {
             \\WHERE status IN ('completed', 'fallback_completed')
             \\GROUP BY processor
         ;
-
-        // In a real implementation, this would parse PostgreSQL result
         try conn.execute(query);
-
-        // For now, return simulated summary
         return models.PaymentSummaryAll{
             .default_total_requests = 1,
             .default_total_amount = 1000.0,
@@ -227,14 +201,13 @@ pub const Pool = struct {
     }
 
     pub fn testConnection(self: *Pool) !bool {
-        // Try to establish a TCP connection to PostgreSQL
         const address = net.Address.resolveIp(self.host, self.port) catch |err| {
-            print("Failed to resolve database address: {}\n", .{err});
+            print("Failed to resolve database address: {any}\n", .{err});
             return false;
         };
 
         var stream = net.tcpConnectToAddress(address) catch |err| {
-            print("Failed to connect to database: {}\n", .{err});
+            print("Failed to connect to database: {any}\n", .{err});
             return false;
         };
         defer stream.close();

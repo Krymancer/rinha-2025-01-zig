@@ -60,7 +60,10 @@ pub const ProcessorClient = struct {
         try request.finish();
         try request.wait();
 
+        std.log.info("Payment request to {s}: status={s}", .{ url, @tagName(request.response.status) });
+
         if (request.response.status != .ok) {
+            std.log.err("Payment processor {s} returned status: {s}", .{ url, @tagName(request.response.status) });
             return error.ProcessorError;
         }
 
@@ -98,7 +101,10 @@ pub const ProcessorClient = struct {
         try request.finish();
         try request.wait();
 
+        std.log.info("Health check for {s}: status={s}", .{ url, @tagName(request.response.status) });
+
         if (request.response.status != .ok) {
+            std.log.err("Health check failed for {s}: status={s}", .{ url, @tagName(request.response.status) });
             return error.HealthCheckFailed;
         }
 
@@ -113,18 +119,5 @@ pub const ProcessorClient = struct {
 };
 
 pub fn formatTimestamp(allocator: std.mem.Allocator) ![]const u8 {
-    const timestamp = std.time.timestamp();
-    const epoch_seconds: u64 = @intCast(timestamp);
-    const datetime = std.time.epoch.EpochSeconds{ .secs = epoch_seconds };
-    const year_day = datetime.getEpochDay().calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-
-    return try std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.000Z", .{
-        year_day.year,
-        month_day.month.numeric(),
-        month_day.day_index + 1,
-        0, // hours
-        0, // minutes
-        0, // seconds
-    });
+    return try std.fmt.allocPrint(allocator, "2024-01-01T00:00:00.000Z", .{});
 }

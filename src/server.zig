@@ -8,17 +8,15 @@ pub fn start(allocator: std.mem.Allocator, db_pool: *database.Pool, port: u16) !
     var server = try address.listen(.{ .reuse_address = true });
     defer server.deinit();
 
-    std.log.info("Server listening on port {}", .{port});
+    std.log.info("Server listening on port {any}", .{port});
 
     while (true) {
         const connection = server.accept() catch |err| {
-            std.log.err("Failed to accept connection: {}", .{err});
+            std.log.err("Failed to accept connection: {any}", .{err});
             continue;
         };
-
-        // Handle connection in a separate thread for concurrency
         const thread = std.Thread.spawn(.{}, handleConnection, .{ allocator, db_pool, connection }) catch |err| {
-            std.log.err("Failed to spawn thread: {}", .{err});
+            std.log.err("Failed to spawn thread: {any}", .{err});
             connection.stream.close();
             continue;
         };
@@ -33,12 +31,12 @@ fn handleConnection(allocator: std.mem.Allocator, db_pool: *database.Pool, conne
     var http_server = std.http.Server.init(connection, &buffer);
 
     var request = http_server.receiveHead() catch |err| {
-        std.log.err("Failed to receive request: {}", .{err});
+        std.log.err("Failed to receive request: {any}", .{err});
         return;
     };
 
     handleRequest(allocator, db_pool, &request) catch |err| {
-        std.log.err("Failed to handle request: {}", .{err});
+        std.log.err("Failed to handle request: {any}", .{err});
         _ = request.respond("Internal Server Error", .{
             .status = .internal_server_error,
         }) catch {};
@@ -48,8 +46,6 @@ fn handleConnection(allocator: std.mem.Allocator, db_pool: *database.Pool, conne
 fn handleRequest(allocator: std.mem.Allocator, db_pool: *database.Pool, request: *std.http.Server.Request) !void {
     const method = request.head.method;
     const path = request.head.target;
-
-    // Parse path without query parameters
     const clean_path = if (std.mem.indexOf(u8, path, "?")) |query_start|
         path[0..query_start]
     else

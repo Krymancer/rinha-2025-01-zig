@@ -10,8 +10,6 @@ pub fn handleRequest(
 ) !void {
     const method = request.head.method;
     const target = request.head.target;
-
-    // Route requests
     if (method == .POST and std.mem.eql(u8, target, "/payments")) {
         return payments.handle(allocator, db_pool, request);
     } else if (method == .GET and std.mem.startsWith(u8, target, "/payments-summary")) {

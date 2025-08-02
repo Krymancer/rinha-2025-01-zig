@@ -1,4 +1,4 @@
-# Zig Programming Copilot Instructions
+# Zig Programming Instructions
 
 ## Basic Principles
 - Use English for all code and documentation.
@@ -90,3 +90,6 @@
 - Utilize the select statement to wait for multiple channel operations simultaneously, facilitating non-blocking communication patterns.
 - For low-level threading control, use primitives such as std.Thread, std.Mutex, std.Semaphore, and std.WaitGroup.
 - Avoid data races and ensure thread safety by correctly applying synchronization mechanisms like mutex.lock() and defer mutex.unlock(), or semaphore.wait() and semaphore.post().
+
+## Comments
+- Do not commend unless absolutety necessary, redundant comments are not acceptable

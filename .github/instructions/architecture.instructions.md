@@ -1,4 +1,4 @@
-# Architecture and Deployment Instructions for Rinha de Backend 2025
+# Architecture and Deployment Instructions for Rinha de Backend
 
 This document describes the proposed architecture and detailed instructions for deploying a high-performance backend system, optimized for the "Rinha de Backend 2025" challenge. The solution uses Docker Compose for orchestration, HAProxy for load balancing, PostgreSQL for transactional data persistence, and Redis for message queues and caching, with application logic developed in Zig.
 

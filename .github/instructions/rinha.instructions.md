@@ -1,4 +1,4 @@
-# Instructions for Backend Contest - 2025
+# Instructions for Backend Contest
 
 ## Challenge
 Your team and/or you need to develop a backend that intermediates payment requests to a payment processing service, called Payment Processor.
