@@ -10,6 +10,10 @@ const QueueMessage = @import("queue.zig").QueueMessage;
 const config = @import("config.zig");
 const money = @import("money.zig");
 
+pub const std_options: std.Options = .{
+    .log_level = .info,
+};
+
 pub const Server = struct {
     const Self = @This();
 
@@ -32,12 +36,22 @@ pub const Server = struct {
     }
 
     pub fn listen(self: *Self, socket_path: []const u8) !void {
-        std.fs.deleteFileAbsolute(socket_path) catch {};
         const address = try net.Address.initUnix(socket_path);
         var listener = try net.Address.listen(address, .{
             .reuse_address = true,
         });
         defer listener.deinit();
+
+        // Set socket permissions using chmod system call
+        const socket_path_z = try self.allocator.dupeZ(u8, socket_path);
+        defer self.allocator.free(socket_path_z);
+        const result = std.c.chmod(socket_path_z.ptr, 0o666);
+
+        if (result != 0) {
+            std.log.err("Failed to chmod socket {s}: {d}", .{ socket_path, result });
+        } else {
+            std.log.info("Successfully set permissions for socket {s}", .{socket_path});
+        }
 
         std.log.info("Server listening on: {s}", .{socket_path});
 

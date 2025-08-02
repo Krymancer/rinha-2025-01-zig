@@ -5,6 +5,10 @@ const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 const config = @import("config.zig");
 
+pub const std_options: std.Options = .{
+    .log_level = .info,
+};
+
 pub const PaymentData = struct {
     requestedAt: []const u8,
     amount: f64,

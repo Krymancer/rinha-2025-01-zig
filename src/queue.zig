@@ -12,6 +12,10 @@ const PaymentResult = @import("payment_processor.zig").PaymentResult;
 const config = @import("config.zig");
 const money = @import("money.zig");
 
+pub const std_options: std.Options = .{
+    .log_level = .info,
+};
+
 pub const QueueMessage = struct {
     amount: f64,
     correlation_id: []const u8,

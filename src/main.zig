@@ -10,15 +10,16 @@ const Server = @import("server.zig").Server;
 const State = @import("state.zig").State;
 const Queue = @import("queue.zig").Queue;
 
+pub const std_options: std.Options = .{
+    .log_level = .info,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.log.info("Starting application...\n", .{});
-    std.log.err("Starting application...\n", .{});
-    std.log.warn("Starting application...\n", .{});
-    std.log.debug("Starting application...\n", .{});
+    std.log.info("Starting application", .{});
 
     // Initialize configuration
     var app_config = try config.Config.init(allocator);
@@ -48,5 +49,8 @@ pub fn main() !void {
     std.log.info("Server initialized", .{});
 
     std.log.info("Server starting on socket: {s}", .{app_config.socket_path});
-    try server.listen(app_config.socket_path);
+    server.listen(app_config.socket_path) catch |err| {
+        std.log.err("Failed to start server: {any}", .{err});
+        return err;
+    };
 }
