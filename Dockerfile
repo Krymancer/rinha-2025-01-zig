@@ -1,17 +1,11 @@
 FROM alpine:latest AS builder
-RUN apk add --no-cache \
-  curl \
-  xz \
-  git \
-  build-base \
-  linux-headers \
-  zig
+RUN apk add --no-cache zig
 WORKDIR /app
 COPY build.zig build.zig.zon ./
 COPY src/ ./src/
 RUN zig build -Doptimize=ReleaseFast 
 FROM alpine
-RUN apk add --no-cache libc6-compat sqlite
+RUN apk add --no-cache libc6-compat
 RUN adduser -D -s /bin/sh appuser
 COPY --from=builder /app/zig-out/bin/backend /usr/local/bin/backend
 USER appuser

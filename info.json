@@ -9,18 +9,13 @@
         "zig"
     ],
     "storages": [
-        "postgresql",
-        "redis"
+        "in-memory-bitpacking"
     ],
     "messaging": [
         "in-memory-queue"
     ],
     "load-balancers": [
-        "haproxy"
+        "nginx"
     ],
-    "other-technologies": [
-        "httpz",
-        "pgzig",
-        "alpine-linux"
-    ]
+    "description": "High-performance payment processor in Zig with bit-packed memory storage, worker threads, and Unix socket communication for maximum throughput and minimal memory usage."
 }
