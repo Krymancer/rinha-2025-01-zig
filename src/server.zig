@@ -60,11 +60,12 @@ pub const Server = struct {
                 std.log.err("Failed to accept connection: {}", .{err});
                 continue;
             };
-
             // Handle request in a separate thread
             const thread = try Thread.spawn(.{}, handleConnection, .{ self, connection });
             thread.detach();
         }
+
+        std.log.info("Server stopped listening on: {s}", .{socket_path});
     }
 
     fn handleConnection(self: *Self, connection: net.Server.Connection) void {
@@ -90,6 +91,8 @@ pub const Server = struct {
         var parts = std.mem.splitScalar(u8, first_line, ' ');
         const method = parts.next() orelse return;
         const path = parts.next() orelse return;
+
+        std.log.info("Received request: {s} {s}", .{ method, path });
 
         // Route requests
         if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/payments")) {
@@ -161,6 +164,12 @@ pub const Server = struct {
                 }
             }
         }
+
+        std.log.info("Handling payments summary: from={s}, to={s}, local_only={}", .{
+            if (from) |f| f else "null",
+            if (to) |t| t else "null",
+            local_only,
+        });
 
         // Get payment summary
         const summary = try self.getPaymentSummary(from, to, local_only);
@@ -343,6 +352,7 @@ pub const Server = struct {
         // Parse JSON response body
         const response_body = response_data[body_start..];
         var parsed = json.parseFromSlice(PaymentSummaryResponse, self.allocator, response_body, .{}) catch {
+            std.log.err("Failed to parse foreign payment summary: {s}", .{response_body});
             return PaymentSummaryResponse{
                 .default = PaymentSummary{ .totalRequests = 0, .totalAmount = 0 },
                 .fallback = PaymentSummary{ .totalRequests = 0, .totalAmount = 0 },

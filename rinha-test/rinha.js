@@ -181,7 +181,7 @@ export async function teardown() {
 export async function payments() {
 
   const payload = {
-    correlationId: uuidv4(),
+    correlation_id: uuidv4(),
     amount: paymentRequestFixedAmount.toNumber()
   };
 
