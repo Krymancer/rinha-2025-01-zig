@@ -1,0 +1,19 @@
+POST http://localhost:9999/payments
+Content-Type: application/json
+
+{
+  "amount": 19.90,
+  "correlation_id": "{{$guid}}"
+}
+
+###
+
+GET http://localhost:9999/payments-summary
+
+### 
+
+GET http://localhost:9999/payments-summary?localOnly=true
+
+###
+
+GET http://localhost:9999/payments-summary?from=2024-01-01&to=2024-12-31
