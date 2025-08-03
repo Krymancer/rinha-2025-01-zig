@@ -2,6 +2,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
+pub const std_options: std.Options = .{
+    .log_level = .info,
+};
+
 pub const StorageEntry = struct {
     amount: u32,
     requested_at: i64,
@@ -35,6 +39,7 @@ pub const BitPackingPaymentStorage = struct {
     }
 
     pub fn push(self: *Self, amount: u32, current_timestamp: i64) !void {
+        std.log.info("Pushing payment: amount={}, timestamp={}", .{ amount, current_timestamp });
         const delta = current_timestamp - self.start_timestamp;
 
         if (delta < 0 or delta > 86_400_000) {
@@ -47,6 +52,7 @@ pub const BitPackingPaymentStorage = struct {
 
         // Pack: 20 bits for delta (up to ~1M ms), 12 bits for amount (up to 4095)
         const packed_value: u32 = (@as(u32, @intCast(delta)) << 12) | amount;
+        std.log.info("Packed value: {x}", .{packed_value});
 
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -67,6 +73,11 @@ pub const BitPackingPaymentStorage = struct {
                 .amount = amount,
                 .requested_at = self.start_timestamp + @as(i64, delta),
             };
+        }
+
+        std.log.info("Listed {} entries", .{entries.len});
+        for (entries) |e| {
+            std.log.info("Entry: amount={}, requested_at={}", .{ e.amount, e.requested_at });
         }
 
         return entries;

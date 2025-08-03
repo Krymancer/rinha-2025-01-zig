@@ -12,6 +12,8 @@ services:
     networks:
       - payment-processor
     restart: unless-stopped
+    ports:
+      - "8003:8080"
     deploy:
       resources:
         limits:
@@ -31,6 +33,8 @@ services:
     networks:
       - payment-processor
     restart: unless-stopped
+    ports:
+      - "8004:8080"
     deploy:
       resources:
         limits:

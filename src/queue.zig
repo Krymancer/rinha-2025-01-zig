@@ -105,13 +105,16 @@ pub const Queue = struct {
 
             try self.worker_data.append(data);
 
-            const thread = try Thread.spawn(.{}, workerLoop, .{&self.worker_data.items[i]});
+            const thread = Thread.spawn(.{}, workerLoop, .{&self.worker_data.items[i]}) catch |err| {
+                std.log.err("Failed to start worker thread {}: {}", .{ i, err });
+                continue;
+            };
             try self.workers.append(thread);
         }
     }
 
     pub fn enqueue(self: *Self, amount: f64, correlation_id: []const u8) !void {
-        // Create a copy of the correlation_id string for thread safety
+        std.log.info("Enqueuing payment: amount={}, correlation_id={s}", .{ amount, correlation_id });
         const id_copy = try self.allocator.dupe(u8, correlation_id);
 
         const message = QueueMessage{

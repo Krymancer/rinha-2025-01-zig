@@ -42,7 +42,6 @@ pub const Server = struct {
         });
         defer listener.deinit();
 
-        // Set socket permissions using chmod system call
         const socket_path_z = try self.allocator.dupeZ(u8, socket_path);
         defer self.allocator.free(socket_path_z);
         const result = std.c.chmod(socket_path_z.ptr, 0o666);
@@ -60,7 +59,6 @@ pub const Server = struct {
                 std.log.err("Failed to accept connection: {}", .{err});
                 continue;
             };
-            // Handle request in a separate thread
             const thread = try Thread.spawn(.{}, handleConnection, .{ self, connection });
             thread.detach();
         }
@@ -107,9 +105,10 @@ pub const Server = struct {
     }
 
     fn handlePayments(self: *Self, connection: net.Server.Connection, request_data: []const u8) !void {
-        // Find the request body (after \r\n\r\n)
+        std.log.info("Handling payments request", .{});
         const body_start = std.mem.indexOf(u8, request_data, "\r\n\r\n");
         if (body_start == null) {
+            std.log.err("Invalid request: no body found", .{});
             try self.sendResponse(connection, "400 Bad Request", "");
             return;
         }
@@ -127,12 +126,14 @@ pub const Server = struct {
 
         // Validate message
         if (message.amount <= 0 or message.correlation_id.len == 0) {
+            std.log.err("Invalid payment request: amount={}, correlation_id={s}", .{ message.amount, message.correlation_id });
             try self.sendResponse(connection, "400 Bad Request", "");
             return;
         }
 
         // Enqueue message
         self.queue.enqueue(message.amount, message.correlation_id) catch {
+            std.log.err("Failed to enqueue payment: amount={}, correlation_id={s}", .{ message.amount, message.correlation_id });
             try self.sendResponse(connection, "500 Internal Server Error", "");
             return;
         };
@@ -172,7 +173,11 @@ pub const Server = struct {
         });
 
         // Get payment summary
-        const summary = try self.getPaymentSummary(from, to, local_only);
+        const summary = self.getPaymentSummary(from, to, local_only) catch |err| {
+            std.log.err("Failed to get payment summary: {}", .{err});
+            try self.sendResponse(connection, "500 Internal Server Error", "");
+            return;
+        };
 
         // Serialize to JSON
         var json_buf = std.ArrayList(u8).init(self.allocator);
@@ -191,6 +196,12 @@ pub const Server = struct {
     }
 
     fn getPaymentSummary(self: *Self, from: ?[]const u8, to: ?[]const u8, local_only: bool) !PaymentSummaryResponse {
+        std.log.info("Getting payment summary: from={s}, to={s}, local_only={}", .{
+            if (from) |f| f else "null",
+            if (to) |t| t else "null",
+            local_only,
+        });
+
         // Get local state
         const default_entries = try self.state.default.list(self.allocator);
         defer self.allocator.free(default_entries);
