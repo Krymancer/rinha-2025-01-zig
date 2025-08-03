@@ -71,6 +71,7 @@ pub const Queue = struct {
         };
 
         // Start worker threads
+        std.log.info("About to start worker threads", .{});
         try self.startWorkers();
 
         return self;
@@ -94,6 +95,7 @@ pub const Queue = struct {
     }
 
     fn startWorkers(self: *Self) !void {
+        std.log.info("Starting {} worker threads", .{self.options.workers});
         for (0..self.options.workers) |i| {
             const data = WorkerData{
                 .queue = self,
@@ -110,7 +112,9 @@ pub const Queue = struct {
                 continue;
             };
             try self.workers.append(thread);
+            std.log.info("Started worker thread {}", .{i});
         }
+        std.log.info("All worker threads started", .{});
     }
 
     pub fn enqueue(self: *Self, amount: f64, correlation_id: []const u8) !void {
@@ -133,11 +137,14 @@ pub const Queue = struct {
     }
 
     fn workerLoop(data: *WorkerData) void {
+        std.log.info("Worker thread {} starting", .{data.thread_id});
         var processor = PaymentProcessor.init(data.queue.allocator, data.default_processor_url, data.fallback_processor_url) catch |err| {
-            std.log.err("Failed to initialize payment processor: {}", .{err});
+            std.log.err("Failed to initialize payment processor in worker {}: {}", .{ data.thread_id, err });
             return;
         };
         defer processor.deinit();
+
+        std.log.info("Worker thread {} initialized successfully", .{data.thread_id});
 
         while (!data.should_stop.load(.acquire)) {
             data.queue.mutex.lock();
