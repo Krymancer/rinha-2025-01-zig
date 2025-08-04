@@ -5,12 +5,12 @@ const ArrayList = std.ArrayList;
 const Mutex = std.Thread.Mutex;
 const Condition = std.Thread.Condition;
 
-const State = @import("state.zig").State;
+const config = @import("config/env.zig");
+const State = @import("shared/state.zig").State;
 const PaymentProcessor = @import("payment_processor.zig").PaymentProcessor;
 const PaymentData = @import("payment_processor.zig").PaymentData;
 const PaymentResult = @import("payment_processor.zig").PaymentResult;
-const config = @import("config.zig");
-const money = @import("money.zig");
+const money = @import("shared/money.zig");
 
 pub const std_options: std.Options = .{
     .log_level = .info,
@@ -131,9 +131,11 @@ pub const Queue = struct {
 
         // Add message to queue
         try self.messages.append(message);
+        std.log.info("Queue size after enqueue: {}", .{self.messages.items.len});
 
-        // Wake up a worker
-        self.condition.signal();
+        // Wake up a worker with fixed memory location
+        self.condition.broadcast();
+        std.log.info("Worker broadcast for payment: {s}", .{correlation_id});
     }
 
     fn workerLoop(data: *WorkerData) void {
@@ -149,32 +151,34 @@ pub const Queue = struct {
         while (!data.should_stop.load(.acquire)) {
             data.queue.mutex.lock();
 
-            // Wait for work or stop signal
+            // Use the standard condition variable pattern
             while (data.queue.messages.items.len == 0 and !data.should_stop.load(.acquire)) {
+                std.log.info("Worker {} waiting for work... (queue size: {})", .{ data.thread_id, data.queue.messages.items.len });
                 data.queue.condition.wait(&data.queue.mutex);
+                std.log.info("Worker {} woke up! Queue size now: {}", .{ data.thread_id, data.queue.messages.items.len });
             }
 
-            // Check again if we should stop after waking up
+            // Check if we should stop after waking up
             if (data.should_stop.load(.acquire)) {
                 data.queue.mutex.unlock();
                 break;
             }
 
-            // Dequeue message if available
-            const maybe_message = if (data.queue.messages.items.len > 0) blk: {
+            // At this point, we know there's at least one message
+            if (data.queue.messages.items.len > 0) {
                 const message = data.queue.messages.orderedRemove(0);
-                break :blk message;
-            } else null;
+                std.log.info("Worker {} dequeued message: {s}", .{ data.thread_id, message.correlation_id });
+                data.queue.mutex.unlock();
 
-            data.queue.mutex.unlock();
-
-            if (maybe_message) |message| {
                 processMessage(data.queue, &processor, message) catch |err| {
                     std.log.err("Failed to process message: {}", .{err});
                 };
 
                 // Free the copied correlation_id
                 data.queue.allocator.free(message.correlation_id);
+            } else {
+                // This shouldn't happen, but just in case
+                data.queue.mutex.unlock();
             }
         }
     }

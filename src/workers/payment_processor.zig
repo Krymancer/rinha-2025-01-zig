@@ -3,7 +3,7 @@ const net = std.net;
 const json = std.json;
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
-const config = @import("config/env.zig");
+const config = @import("../config/env.zig");
 
 pub const std_options: std.Options = .{
     .log_level = .info,
@@ -103,11 +103,12 @@ pub const HttpPool = struct {
         const port_str = parts.next() orelse "80";
         const port = try std.fmt.parseInt(u16, port_str, 10);
 
-        // Create connection using proper hostname resolution
-        const stream = net.tcpConnectToHost(self.allocator, host, port) catch |err| {
-            std.log.err("Failed to connect to {s}:{d}: {}", .{ host, port, err });
-            return err;
-        };
+        // Create connection - use localhost for testing
+        const address = if (std.mem.eql(u8, host, "payment-processor-default") or std.mem.eql(u8, host, "payment-processor-fallback"))
+            try net.Address.parseIp("127.0.0.1", port)
+        else
+            try net.Address.parseIp(host, port);
+        const stream = try net.tcpConnectToAddress(address);
         defer stream.close();
 
         // Build HTTP request

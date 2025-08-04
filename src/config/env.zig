@@ -5,11 +5,6 @@ pub const ProcessorType = enum {
     fallback,
 };
 
-pub const payment_processor_urls = struct {
-    pub const default = "http://payment-processor-default:8080";
-    pub const fallback = "http://payment-processor-fallback:8080";
-};
-
 pub const Config = struct {
     socket_path: []const u8,
     foreign_state: []const u8,

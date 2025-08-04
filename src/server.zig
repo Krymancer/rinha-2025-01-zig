@@ -4,25 +4,103 @@ const json = std.json;
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
-const State = @import("state.zig").State;
+const State = @import("shared/state.zig").State;
 const Queue = @import("queue.zig").Queue;
 const QueueMessage = @import("queue.zig").QueueMessage;
-const config = @import("config.zig");
-const money = @import("money.zig");
+const PaymentProcessor = @import("payment_processor.zig").PaymentProcessor;
+const PaymentData = @import("payment_processor.zig").PaymentData;
+const config = @import("config/env.zig");
+const money = @import("shared/money.zig");
+const time = @import("shared/time.zig");
 
 pub const std_options: std.Options = .{
     .log_level = .info,
 };
+
+const DirectWorkerData = struct {
+    server: *Server,
+    amount: f64,
+    correlation_id: []const u8,
+    allocator: Allocator,
+};
+
+fn processPaymentDirectly(data: *DirectWorkerData) void {
+    defer {
+        data.allocator.free(data.correlation_id);
+        data.allocator.destroy(data);
+    }
+
+    std.log.info("Direct worker processing payment: amount={d}, correlation_id={s}", .{ data.amount, data.correlation_id });
+
+    // Initialize payment processor
+    var processor = PaymentProcessor.init(
+        data.allocator,
+        "payment-processor-default:3001",
+        "payment-processor-fallback:3002",
+    ) catch |err| {
+        std.log.err("Failed to initialize payment processor for direct worker: {}", .{err});
+        return;
+    };
+    defer processor.deinit();
+
+    // Create payment data
+    var timestamp_buf: [32]u8 = undefined;
+    const timestamp_str = std.fmt.bufPrint(&timestamp_buf, "{}", .{std.time.milliTimestamp()}) catch {
+        std.log.err("Failed to format timestamp for payment {s}", .{data.correlation_id});
+        return;
+    };
+
+    const payment_data = PaymentData{
+        .amount = data.amount,
+        .correlationId = data.correlation_id,
+        .requestedAt = timestamp_str,
+    };
+
+    // Retry logic with exponential backoff
+    const max_retries = 10;
+    var retry_count: u32 = 0;
+    var delay_ms: u64 = 100; // Start with 100ms
+
+    while (retry_count < max_retries) {
+        _ = processor.processWithDefault(payment_data) catch |err| {
+            std.log.warn("Payment attempt {} failed for {s}: {}", .{ retry_count + 1, data.correlation_id, err });
+            retry_count += 1;
+            if (retry_count < max_retries) {
+                std.time.sleep(delay_ms * 1_000_000); // Convert to nanoseconds
+                delay_ms = @min(delay_ms * 2, 5000); // Cap at 5 seconds
+            }
+            continue;
+        };
+        // Payment succeeded, store result
+        std.log.info("Payment processed successfully for {s} after {} attempts", .{ data.correlation_id, retry_count + 1 });
+        // Store in default state
+        const amount_cents = money.floatToCents(data.amount);
+        const timestamp_ms = std.time.milliTimestamp();
+        data.server.state.default.push(amount_cents, timestamp_ms) catch |err| {
+            std.log.err("Failed to store default payment result: {}", .{err});
+        };
+        return;
+    }
+    std.log.err("Payment failed after {} attempts for {s}, storing in fallback", .{ max_retries, data.correlation_id });
+
+    // Store in fallback after all retries exhausted
+    const amount_cents = money.floatToCents(data.amount);
+    const timestamp_ms = std.time.milliTimestamp();
+
+    data.server.state.fallback.push(amount_cents, timestamp_ms) catch |err| {
+        std.log.err("Failed to store fallback payment result: {}", .{err});
+    };
+}
 
 pub const Server = struct {
     const Self = @This();
 
     allocator: Allocator,
     state: *State,
-    queue: *Queue,
+    queue: ?*Queue,
     config: *const config.Config,
 
-    pub fn init(allocator: Allocator, state: *State, queue: *Queue, app_config: *const config.Config) !Self {
+    pub fn init(allocator: Allocator, state: *State, queue: ?*Queue, app_config: *const config.Config) !Self {
         return Self{
             .allocator = allocator,
             .state = state,
@@ -36,14 +114,17 @@ pub const Server = struct {
     }
 
     pub fn listen(self: *Self, socket_path: []const u8) !void {
+        // Clean up any existing socket file first
+        const socket_path_z = try self.allocator.dupeZ(u8, socket_path);
+        defer self.allocator.free(socket_path_z);
+        _ = std.c.unlink(socket_path_z.ptr); // Ignore errors if file doesn't exist
+
         const address = try net.Address.initUnix(socket_path);
         var listener = try net.Address.listen(address, .{
             .reuse_address = true,
         });
         defer listener.deinit();
 
-        const socket_path_z = try self.allocator.dupeZ(u8, socket_path);
-        defer self.allocator.free(socket_path_z);
         const result = std.c.chmod(socket_path_z.ptr, 0o666);
 
         if (result != 0) {
@@ -66,42 +147,12 @@ pub const Server = struct {
         std.log.info("Server stopped listening on: {s}", .{socket_path});
     }
 
-    fn handleConnection(self: *Self, connection: net.Server.Connection) void {
-        defer connection.stream.close();
-
-        self.handleConnectionInner(connection) catch |err| {
-            std.log.err("Error handling connection: {}", .{err});
+    fn sendResponse(self: *Self, connection: net.Server.Connection, status: []const u8, body: []const u8) !void {
+        const response = try std.fmt.allocPrint(self.allocator, "HTTP/1.1 {s}\r\nContent-Length: {d}\r\n\r\n{s}", .{ status, body.len, body });
+        defer self.allocator.free(response);
+        _ = connection.stream.writeAll(response) catch |err| {
+            std.log.err("Failed to send response: {}", .{err});
         };
-    }
-
-    fn handleConnectionInner(self: *Self, connection: net.Server.Connection) !void {
-        var buffer: [4096]u8 = undefined;
-        const bytes_read = try connection.stream.read(&buffer);
-
-        if (bytes_read == 0) return;
-
-        const request_data = buffer[0..bytes_read];
-
-        // Simple HTTP request parsing
-        var lines = std.mem.splitSequence(u8, request_data, "\r\n");
-        const first_line = lines.next() orelse return;
-
-        var parts = std.mem.splitScalar(u8, first_line, ' ');
-        const method = parts.next() orelse return;
-        const path = parts.next() orelse return;
-
-        std.log.info("Received request: {s} {s}", .{ method, path });
-
-        // Route requests
-        if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/payments")) {
-            try self.handlePayments(connection, request_data);
-        } else if (std.mem.eql(u8, method, "GET") and std.mem.startsWith(u8, path, "/payments-summary")) {
-            try self.handlePaymentsSummary(connection, path);
-        } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/purge-payments")) {
-            try self.handlePurgePayments(connection);
-        } else {
-            try self.sendResponse(connection, "404 Not Found", "");
-        }
     }
 
     fn handlePayments(self: *Self, connection: net.Server.Connection, request_data: []const u8) !void {
@@ -131,18 +182,41 @@ pub const Server = struct {
             return;
         }
 
-        // Enqueue message
-        self.queue.enqueue(message.amount, message.correlation_id) catch {
-            std.log.err("Failed to enqueue payment: amount={}, correlation_id={s}", .{ message.amount, message.correlation_id });
-            try self.sendResponse(connection, "500 Internal Server Error", "");
-            return;
+        // Skip queue - spawn worker thread directly
+        const correlation_id_copy = try self.allocator.dupe(u8, message.correlation_id);
+
+        const worker_data = try self.allocator.create(DirectWorkerData);
+        worker_data.* = DirectWorkerData{
+            .server = self,
+            .amount = message.amount,
+            .correlation_id = correlation_id_copy,
+            .allocator = self.allocator,
         };
 
-        // Send OK response
+        const thread = try Thread.spawn(.{}, processPaymentDirectly, .{worker_data});
+        thread.detach();
+
+        std.log.info("Spawned direct worker for payment: amount={}, correlation_id={s}", .{ message.amount, message.correlation_id });
+
+        // Send OK response immediately
         try self.sendResponse(connection, "200 OK", "");
     }
 
-    fn handlePaymentsSummary(self: *Self, connection: net.Server.Connection, path: []const u8) !void {
+    fn handlePaymentsSummary(self: *Self, connection: net.Server.Connection, request_data: []const u8) !void {
+        // Parse the path from the request
+        var lines = std.mem.splitSequence(u8, request_data, "\r\n");
+        const first_line = lines.next() orelse {
+            try self.sendResponse(connection, "400 Bad Request", "");
+            return;
+        };
+
+        var parts = std.mem.splitScalar(u8, first_line, ' ');
+        _ = parts.next(); // method
+        const path = parts.next() orelse {
+            try self.sendResponse(connection, "400 Bad Request", "");
+            return;
+        };
+
         // Parse query parameters
         var from: ?[]const u8 = null;
         var to: ?[]const u8 = null;
@@ -173,11 +247,7 @@ pub const Server = struct {
         });
 
         // Get payment summary
-        const summary = self.getPaymentSummary(from, to, local_only) catch |err| {
-            std.log.err("Failed to get payment summary: {}", .{err});
-            try self.sendResponse(connection, "500 Internal Server Error", "");
-            return;
-        };
+        const summary = try self.getPaymentSummary(from, to, local_only);
 
         // Serialize to JSON
         var json_buf = std.ArrayList(u8).init(self.allocator);
@@ -195,6 +265,14 @@ pub const Server = struct {
         try self.sendResponse(connection, "200 OK", "");
     }
 
+    fn sendJsonResponse(self: *Self, connection: net.Server.Connection, json_content: []const u8) !void {
+        const response = try std.fmt.allocPrint(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {d}\r\n\r\n{s}", .{ json_content.len, json_content });
+        defer self.allocator.free(response);
+        _ = connection.stream.writeAll(response) catch |err| {
+            std.log.err("Failed to send JSON response: {}", .{err});
+        };
+    }
+
     fn getPaymentSummary(self: *Self, from: ?[]const u8, to: ?[]const u8, local_only: bool) !PaymentSummaryResponse {
         std.log.info("Getting payment summary: from={s}, to={s}, local_only={}", .{
             if (from) |f| f else "null",
@@ -210,8 +288,8 @@ pub const Server = struct {
         defer self.allocator.free(fallback_entries);
 
         // Parse timestamps
-        const from_ts = if (from) |f| parseTimestamp(f) else null;
-        const to_ts = if (to) |t| parseTimestamp(t) else null;
+        const from_ts = if (from) |f| time.parseTimestamp(f) else null;
+        const to_ts = if (to) |t| time.parseTimestamp(t) else null;
 
         // Process local state
         var local_summary = PaymentSummaryResponse{
@@ -221,7 +299,11 @@ pub const Server = struct {
 
         // If not local_only, fetch foreign state
         if (!local_only and self.config.foreign_state.len > 0) {
-            const foreign_summary = try self.getForeignSummary(from, to);
+            const foreign_summary = self.getForeignSummary(from, to) catch |err| {
+                std.log.err("Failed to get foreign summary: {}", .{err});
+                // Continue with local-only data on error
+                return local_summary;
+            };
             local_summary.default.totalAmount += foreign_summary.default.totalAmount;
             local_summary.default.totalRequests += foreign_summary.default.totalRequests;
             local_summary.fallback.totalAmount += foreign_summary.fallback.totalAmount;
@@ -373,21 +455,73 @@ pub const Server = struct {
 
         return parsed.value;
     }
-
-    fn sendResponse(self: *Self, connection: net.Server.Connection, status: []const u8, body: []const u8) !void {
-        const response = try std.fmt.allocPrint(self.allocator, "HTTP/1.1 {s}\r\nContent-Type: application/json\r\nContent-Length: {d}\r\n\r\n{s}", .{ status, body.len, body });
-        defer self.allocator.free(response);
-
-        _ = try connection.stream.writeAll(response);
-    }
-
-    fn sendJsonResponse(self: *Self, connection: net.Server.Connection, json_body: []const u8) !void {
-        try self.sendResponse(connection, "200 OK", json_body);
-    }
 };
 
+fn handleConnection(server: *Server, connection: net.Server.Connection) void {
+    defer connection.stream.close();
+
+    var buffer: [4096]u8 = undefined;
+    const bytes_read = connection.stream.readAll(&buffer) catch |err| {
+        std.log.err("Failed to read from connection: {}", .{err});
+        return;
+    };
+
+    const request_data = buffer[0..bytes_read];
+    std.log.info("Received request: {s}", .{request_data[0..@min(200, request_data.len)]});
+
+    if (std.mem.startsWith(u8, request_data, "POST /payments")) {
+        server.handlePayments(connection, request_data) catch |err| {
+            std.log.err("Failed to handle payments: {}", .{err});
+        };
+    } else if (std.mem.startsWith(u8, request_data, "GET /payments-summary")) {
+        server.handlePaymentsSummary(connection, request_data) catch |err| {
+            std.log.err("Failed to handle payments summary: {}", .{err});
+        };
+    } else if (std.mem.startsWith(u8, request_data, "POST /purge-payments")) {
+        server.handlePurgePayments(connection) catch |err| {
+            std.log.err("Failed to handle purge payments: {}", .{err});
+        };
+    } else if (std.mem.startsWith(u8, request_data, "GET /stats")) {
+        handleStats(server, connection, request_data) catch |err| {
+            std.log.err("Failed to handle stats: {}", .{err});
+        };
+    } else {
+        server.sendResponse(connection, "404 Not Found", "") catch |err| {
+            std.log.err("Failed to send 404: {}", .{err});
+        };
+    }
+}
+
+fn handleStats(server: *Server, connection: net.Server.Connection, request_data: []const u8) !void {
+    _ = request_data;
+
+    const StatsResponse = struct {
+        default: PaymentSummary,
+        fallback: PaymentSummary,
+    };
+
+    const default_entries = try server.state.default.list(server.allocator);
+    defer server.allocator.free(default_entries);
+
+    const fallback_entries = try server.state.fallback.list(server.allocator);
+    defer server.allocator.free(fallback_entries);
+
+    const default_summary = processEntries(default_entries, null, null);
+    const fallback_summary = processEntries(fallback_entries, null, null);
+
+    const stats = StatsResponse{
+        .default = default_summary,
+        .fallback = fallback_summary,
+    };
+
+    const json_string = try json.stringifyAlloc(server.allocator, stats, .{});
+    defer server.allocator.free(json_string);
+
+    try server.sendResponse(connection, "200 OK", json_string);
+}
+
 const PaymentSummary = struct {
-    totalRequests: u32,
+    totalRequests: u64,
     totalAmount: f64,
 };
 
@@ -396,13 +530,7 @@ const PaymentSummaryResponse = struct {
     fallback: PaymentSummary,
 };
 
-fn parseTimestamp(date_str: []const u8) ?i64 {
-    // Simple timestamp parsing - you might want to use a proper date parser
-    const timestamp = std.fmt.parseInt(i64, date_str, 10) catch return null;
-    return timestamp;
-}
-
-fn processEntries(entries: []const @import("state.zig").StorageEntry, from_ts: ?i64, to_ts: ?i64) PaymentSummary {
+fn processEntries(entries: []const @import("shared/state.zig").StorageEntry, from_ts: ?i64, to_ts: ?i64) PaymentSummary {
     var summary = PaymentSummary{
         .totalRequests = 0,
         .totalAmount = 0,

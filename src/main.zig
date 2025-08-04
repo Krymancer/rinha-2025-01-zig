@@ -5,10 +5,10 @@ const json = std.json;
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
-const config = @import("config.zig");
+const config = @import("config/env.zig");
 const Server = @import("server.zig").Server;
-const State = @import("state.zig").State;
-const Queue = @import("queue.zig").Queue;
+const State = @import("shared/state.zig").State;
+// const Queue = @import("queue.zig").Queue;
 
 pub const std_options: std.Options = .{
     .log_level = .info,
@@ -33,17 +33,21 @@ pub fn main() !void {
 
     std.log.info("State initialized", .{});
 
-    // Initialize processing queue
-    var queue = try Queue.init(allocator, &state, .{
-        .workers = 1,
-        .is_fire_mode = app_config.is_fire_mode,
-    });
-    defer queue.deinit();
+    // Initialize processing queue (heap-allocated to ensure stable memory location)
+    // var queue = try allocator.create(Queue);
+    // queue.* = try Queue.init(allocator, &state, .{
+    //     .workers = 1,
+    //     .is_fire_mode = app_config.is_fire_mode,
+    // });
+    // defer {
+    //     queue.deinit();
+    //     allocator.destroy(queue);
+    // }
 
-    std.log.info("Queue initialized", .{});
+    std.log.info("Queue disabled - using direct workers", .{});
 
     // Start HTTP server
-    var server = try Server.init(allocator, &state, &queue, &app_config);
+    var server = try Server.init(allocator, &state, null, &app_config);
     defer server.deinit();
 
     std.log.info("Server initialized", .{});
